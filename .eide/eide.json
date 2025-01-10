@@ -1,0 +1,136 @@
+{
+  "name": "F405_USB_HS_MSC",
+  "type": "ARM",
+  "dependenceList": [],
+  "srcDirs": [
+    "Core",
+    "Drivers",
+    "user_code",
+    "Middlewares",
+    "USB_DEVICE"
+  ],
+  "virtualFolder": {
+    "name": "<virtual_root>",
+    "files": [],
+    "folders": [
+      {
+        "name": "startup",
+        "files": [
+          {
+            "path": "startup_stm32f405xx.s"
+          }
+        ],
+        "folders": []
+      }
+    ]
+  },
+  "outDir": "build",
+  "deviceName": null,
+  "packDir": null,
+  "miscInfo": {
+    "uid": "168710ee50410607a2cd435d3b54c8e1"
+  },
+  "targets": {
+    "Debug": {
+      "excludeList": [
+        "user_code/my_device/font.c",
+        "user_code/my_device/ltc2943.cpp",
+        "user_code/my_device/oled.cpp",
+        "user_code/my_device/tp4056.cpp",
+        "user_code/my_device/bluetooth.cpp",
+        "user_code/my_device/IMU.cpp",
+        "user_code/my_device/WIT_Argeement.cpp",
+        "user_code/my_callback/uart_callback.cpp",
+        "user_code/my_public/my_debug.cpp",
+        "user_code/my_callback",
+        "Core/Src/main.cpp"
+      ],
+      "toolchain": "GCC",
+      "compileConfig": {
+        "cpuType": "Cortex-M4",
+        "floatingPointHardware": "single",
+        "scatterFilePath": "stm32f405rgtx_flash.ld",
+        "useCustomScatterFile": true,
+        "storageLayout": {
+          "RAM": [],
+          "ROM": []
+        },
+        "options": "null"
+      },
+      "uploader": "STLink",
+      "uploadConfig": {
+        "bin": "",
+        "proType": "SWD",
+        "resetMode": "default",
+        "runAfterProgram": true,
+        "speed": 4000,
+        "address": "0x08000000",
+        "elFile": "None",
+        "optionBytes": ".eide/debug.st.option.bytes.ini",
+        "otherCmds": ""
+      },
+      "uploadConfigMap": {
+        "JLink": {
+          "bin": "",
+          "baseAddr": "",
+          "cpuInfo": {
+            "vendor": "null",
+            "cpuName": "null"
+          },
+          "proType": 1,
+          "speed": 8000,
+          "otherCmds": ""
+        }
+      },
+      "custom_dep": {
+        "name": "default",
+        "incList": [
+          "Core/Inc",
+          "Drivers/STM32F4xx_HAL_Driver/Inc",
+          "Drivers/STM32F4xx_HAL_Driver/Inc/Legacy",
+          "Drivers/CMSIS/Device/ST/STM32F4xx/Include",
+          "Drivers/CMSIS/Include",
+          "user_code/my_public",
+          "USB_DEVICE/App",
+          "USB_DEVICE/Target",
+          "Middlewares/ST/STM32_USB_Device_Library/Core/Inc",
+          "user_code/my_device",
+          "Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc"
+        ],
+        "libList": [],
+        "defineList": [
+          "USE_HAL_DRIVER ",
+          "STM32F405xx"
+        ]
+      },
+      "builderOptions": {
+        "GCC": {
+          "version": 5,
+          "beforeBuildTasks": [],
+          "afterBuildTasks": [],
+          "global": {
+            "$float-abi-type": "softfp",
+            "output-debug-info": "enable",
+            "misc-control": "--specs=nosys.specs"
+          },
+          "c/cpp-compiler": {
+            "language-c": "c11",
+            "language-cpp": "c++11",
+            "optimization": "level-0",
+            "warnings": "all-warnings",
+            "one-elf-section-per-function": true,
+            "one-elf-section-per-data": true
+          },
+          "asm-compiler": {},
+          "linker": {
+            "output-format": "elf",
+            "remove-unused-input-sections": true,
+            "LIB_FLAGS": "-lm",
+            "$toolName": "auto"
+          }
+        }
+      }
+    }
+  },
+  "version": "3.5"
+}
