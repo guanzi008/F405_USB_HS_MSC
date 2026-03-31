@@ -1261,16 +1261,19 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
 }
 
 static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
+                                              const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                                               const fido_store_credential_t *credential,
                                               uint8_t *resp,
                                               uint16_t resp_cap,
                                               uint16_t *resp_len)
 {
   uint8_t auth_data[256];
+  uint8_t signature[80];
   uint16_t auth_len;
+  uint16_t signature_len = 0U;
   uint16_t off = 0U;
 
-  if ((resp == NULL) || (resp_len == NULL))
+  if ((client_data_hash == NULL) || (resp == NULL) || (resp_len == NULL))
   {
     return 0U;
   }
@@ -1278,15 +1281,29 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   {
     return 0U;
   }
+  if (fido_crypto_sign_es256_der(credential->private_key,
+                                 auth_data,
+                                 auth_len,
+                                 client_data_hash,
+                                 signature,
+                                 sizeof(signature),
+                                 &signature_len) == 0U)
+  {
+    return 0U;
+  }
 
   resp[off++] = CTAP_STATUS_OK;
   if ((cbor_write_map(3U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("none", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("packed", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(auth_data, auth_len, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(0U, resp, resp_cap, &off) == 0U))
+      (cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("alg", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_nint(-7, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("sig", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
   {
     return 0U;
   }
@@ -1610,7 +1627,12 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                              parsed.user_name,
                              parsed.user_display_name,
                              &credential) == 0U) ||
-        (build_make_credential_response(rp_id_hash, &credential, resp, resp_cap, resp_len) == 0U))
+        (build_make_credential_response(rp_id_hash,
+                                        parsed.client_data_hash,
+                                        &credential,
+                                        resp,
+                                        resp_cap,
+                                        resp_len) == 0U))
     {
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
     }
