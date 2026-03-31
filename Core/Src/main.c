@@ -227,13 +227,22 @@ int main(void)
         lcd_status_set_fido_store_result(0u);
         if ((s_delete_selection_count != 0u) && (s_delete_slot_index != 0xFFFFFFFFu))
         {
+          uint8_t delete_ok;
+
           lcd_status_set_fido_delete_progress(1u, 0u);
-          HAL_Delay(30u);
-          lcd_status_set_fido_store_result((uint8_t)(fido_store_delete_with_progress(s_delete_slot_index,
-                                                                                     fido_delete_progress_cb,
-                                                                                     NULL) != 0u ? 1u : 2u));
+          HAL_Delay(120u);
+          delete_ok = (uint8_t)(fido_store_delete_with_progress(s_delete_slot_index,
+                                                                fido_delete_progress_cb,
+                                                                NULL) != 0u ? 1u : 0u);
+          HAL_Delay(120u);
           lcd_status_set_fido_delete_progress(0u, 100u);
+          lcd_status_set_fido_store_result((uint8_t)(delete_ok != 0u ? 1u : 2u));
           fido_delete_refresh_state();
+          HAL_Delay(180u);
+        }
+        else
+        {
+          lcd_status_set_fido_store_result(2u);
         }
       }
       else
