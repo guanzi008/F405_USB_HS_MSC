@@ -13,6 +13,7 @@
 #define CTAP_GA_KEY_RP_ID            0x01U
 #define CTAP_GA_KEY_CLIENT_DATA_HASH 0x02U
 #define CTAP_GA_KEY_ALLOW_LIST       0x03U
+#define CTAP_GA_ALLOW_LIST_MAX       8U
 
 #define CTAP_FLAG_USER_PRESENT 0x01U
 #define CTAP_FLAG_ATTESTED     0x40U
@@ -43,8 +44,9 @@ typedef struct
 {
   uint8_t client_data_hash[FIDO_SHA256_SIZE];
   char rp_id[96];
-  uint8_t allow_credential_id[FIDO_CREDENTIAL_ID_SIZE];
-  uint16_t allow_credential_id_len;
+  uint8_t allow_credential_ids[CTAP_GA_ALLOW_LIST_MAX][FIDO_CREDENTIAL_ID_SIZE];
+  uint16_t allow_credential_id_lens[CTAP_GA_ALLOW_LIST_MAX];
+  uint8_t allow_credential_count;
   uint8_t has_client_data_hash;
   uint8_t has_rp_id;
 } ctap_get_assertion_req_t;
@@ -553,22 +555,28 @@ static uint8_t parse_pubkey_params(cbor_reader_t *reader)
   return found;
 }
 
-static uint8_t parse_allow_list(cbor_reader_t *reader, uint8_t *cred_id, uint16_t *cred_id_len)
+static uint8_t parse_allow_list(cbor_reader_t *reader,
+                                uint8_t cred_ids[CTAP_GA_ALLOW_LIST_MAX][FIDO_CREDENTIAL_ID_SIZE],
+                                uint16_t *cred_id_lens,
+                                uint8_t *cred_id_count)
 {
   uint32_t item_count;
   uint32_t i;
 
-  if ((cred_id == NULL) || (cred_id_len == NULL) || (cbor_enter_array(reader, &item_count) == 0U))
+  if ((cred_ids == NULL) || (cred_id_lens == NULL) || (cred_id_count == NULL) ||
+      (cbor_enter_array(reader, &item_count) == 0U))
   {
     return 0U;
   }
 
-  *cred_id_len = 0U;
+  *cred_id_count = 0U;
   for (i = 0U; i < item_count; ++i)
   {
     uint32_t pair_count;
     uint32_t j;
     uint8_t found = 0U;
+    uint8_t entry_id[FIDO_CREDENTIAL_ID_SIZE];
+    uint16_t entry_id_len = 0U;
 
     if (cbor_enter_map(reader, &pair_count) == 0U)
     {
@@ -582,7 +590,7 @@ static uint8_t parse_allow_list(cbor_reader_t *reader, uint8_t *cred_id, uint16_
       {
         return 0U;
       }
-      if ((i == 0U) && (cbor_text_eq(&key, "id") != 0U))
+      if (cbor_text_eq(&key, "id") != 0U)
       {
         cbor_span_t value;
 
@@ -594,8 +602,8 @@ static uint8_t parse_allow_list(cbor_reader_t *reader, uint8_t *cred_id, uint16_
         {
           return 0U;
         }
-        memcpy(cred_id, value.ptr, value.len);
-        *cred_id_len = value.len;
+        memcpy(entry_id, value.ptr, value.len);
+        entry_id_len = value.len;
         found = 1U;
       }
       else if (cbor_skip_item(reader) == 0U)
@@ -603,9 +611,12 @@ static uint8_t parse_allow_list(cbor_reader_t *reader, uint8_t *cred_id, uint16_
         return 0U;
       }
     }
-    if (found != 0U)
+
+    if ((found != 0U) && (*cred_id_count < CTAP_GA_ALLOW_LIST_MAX))
     {
-      return 1U;
+      memcpy(cred_ids[*cred_id_count], entry_id, entry_id_len);
+      cred_id_lens[*cred_id_count] = entry_id_len;
+      *cred_id_count = (uint8_t)(*cred_id_count + 1U);
     }
   }
 
@@ -756,8 +767,9 @@ static uint8_t parse_get_assertion(const uint8_t *req,
 
       case CTAP_GA_KEY_ALLOW_LIST:
         if (parse_allow_list(&reader,
-                             parsed->allow_credential_id,
-                             &parsed->allow_credential_id_len) == 0U)
+                             parsed->allow_credential_ids,
+                             parsed->allow_credential_id_lens,
+                             &parsed->allow_credential_count) == 0U)
         {
           return 0U;
         }
@@ -1132,6 +1144,8 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     fido_store_credential_t credential;
     uint8_t rp_id_hash[FIDO_SHA256_SIZE];
     uint32_t slot_index = 0U;
+    uint8_t matched = 0U;
+    uint8_t allow_index;
 
     if ((parse_get_assertion(req, req_len, &parsed) == 0U) ||
         (parsed.has_client_data_hash == 0U) ||
@@ -1141,11 +1155,27 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
 
     fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
-    if (fido_store_find(rp_id_hash,
-                        (parsed.allow_credential_id_len != 0U) ? parsed.allow_credential_id : NULL,
-                        parsed.allow_credential_id_len,
-                        &credential,
-                        &slot_index) == 0U)
+    if (parsed.allow_credential_count == 0U)
+    {
+      matched = fido_store_find(rp_id_hash, NULL, 0U, &credential, &slot_index);
+    }
+    else
+    {
+      for (allow_index = 0U; allow_index < parsed.allow_credential_count; ++allow_index)
+      {
+        if (fido_store_find(rp_id_hash,
+                            parsed.allow_credential_ids[allow_index],
+                            parsed.allow_credential_id_lens[allow_index],
+                            &credential,
+                            &slot_index) != 0U)
+        {
+          matched = 1U;
+          break;
+        }
+      }
+    }
+
+    if (matched == 0U)
     {
       return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
     }
