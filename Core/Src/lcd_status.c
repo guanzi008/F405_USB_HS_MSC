@@ -166,6 +166,17 @@ static void lcd_draw_text_line(uint8_t row, const char *text) {
     }
 }
 
+static void lcd_draw_text_at(uint8_t x, uint8_t y, uint8_t clear_w, const char *text)
+{
+    uint8_t draw_x = x;
+
+    ls013_lcd_rect(x, (uint8_t)(y - 1u), clear_w, 8u, 0u);
+    while (*text != '\0' && draw_x < (uint8_t)(x + clear_w - 5u)) {
+        lcd_draw_char(draw_x, y, *text++);
+        draw_x = (uint8_t)(draw_x + 6u);
+    }
+}
+
 static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height)
 {
     uint8_t row;
@@ -325,10 +336,10 @@ static void lcd_draw_fido_popup(void)
     ls013_lcd_rect(12u, 34u, 104u, 60u, 0u);
     ls013_lcd_frame(12u, 34u, 104u, 60u, 1u);
     ls013_lcd_frame(14u, 36u, 100u, 56u, 1u);
-    lcd_draw_text_line(1u, " FIDO CONFIRM");
-    lcd_draw_text_line(3u, cmd_text);
-    lcd_draw_text_line(5u, "SHORT [OK]");
-    lcd_draw_text_line(6u, "LONG  [BACK]");
+    lcd_draw_text_at(24u, 43u, 80u, "FIDO CONFIRM");
+    lcd_draw_text_at(28u, 58u, 72u, cmd_text);
+    lcd_draw_text_at(22u, 74u, 84u, "SHORT  OK");
+    lcd_draw_text_at(22u, 84u, 84u, "LONG   BACK");
 }
 
 static void lcd_redraw_page(void) {
