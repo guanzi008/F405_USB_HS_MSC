@@ -217,3 +217,26 @@ uint8_t fido_store_update_sign_count(uint32_t slot_index, uint32_t sign_count)
   slot.sign_count = sign_count;
   return fido_store_write_slot(slot_index, &slot);
 }
+
+uint8_t fido_store_clear(void)
+{
+  uint8_t blank[FIDO_STORE_SLOT_SIZE];
+  uint32_t slot_index;
+
+  if (fido_store_is_ready() == 0U)
+  {
+    return 0U;
+  }
+
+  memset(blank, 0xFF, sizeof(blank));
+
+  for (slot_index = 0U; slot_index < FIDO_STORE_CREDENTIALS_MAX; ++slot_index)
+  {
+    if (ext_flash_write(fido_store_slot_address(slot_index), blank, sizeof(blank)) == 0U)
+    {
+      return 0U;
+    }
+  }
+
+  return 1U;
+}

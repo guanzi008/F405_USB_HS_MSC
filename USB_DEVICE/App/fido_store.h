@@ -30,5 +30,6 @@ uint8_t fido_store_find(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                         fido_store_credential_t *credential,
                         uint32_t *slot_index);
 uint8_t fido_store_update_sign_count(uint32_t slot_index, uint32_t sign_count);
+uint8_t fido_store_clear(void);
 
 #endif

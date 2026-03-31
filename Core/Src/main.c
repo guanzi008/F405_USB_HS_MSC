@@ -29,6 +29,7 @@
 #include "usbd_core.h"
 #include "usbd_ctap_min.h"
 #include "usbd_fido_class.h"
+#include "fido_store.h"
 #include "aux_inputs.h"
 #include "ext_flash_w25q.h"
 #include "lcd_status.h"
@@ -143,6 +144,10 @@ int main(void)
       if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
       {
         usbd_ctap_min_note_user_presence();
+      }
+      else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == 4u))
+      {
+        lcd_status_set_fido_store_result((uint8_t)(fido_store_clear() != 0u ? 1u : 2u));
       }
       else
       {

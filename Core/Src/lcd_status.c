@@ -9,7 +9,7 @@
 #define LCD_TEXT_X 8u
 #define LCD_TEXT_Y0 36u
 #define LCD_TEXT_PITCH 9u
-#define LCD_APP_COUNT 4u
+#define LCD_APP_COUNT 5u
 #define LCD_FIDO_RESERVED_BYTES (1024u * 1024u)
 #define TITLE_W 28u
 #define TITLE_H 22u
@@ -47,6 +47,7 @@ static uint8_t s_menu_active;
 static uint8_t s_menu_index;
 static uint8_t s_active_app;
 static uint8_t s_page_dirty;
+static uint8_t s_last_fido_store_result;
 
 static const uint8_t k_title_debug[TITLE_H * TITLE_ROW_BYTES] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -219,14 +220,15 @@ static void lcd_draw_menu_page(void) {
     lcd_draw_text_line(2u, (s_menu_index == 1u) ? "> FIDO KEY" : "  FIDO KEY");
     lcd_draw_text_line(3u, (s_menu_index == 2u) ? "> SPI FLASH" : "  SPI FLASH");
     lcd_draw_text_line(4u, (s_menu_index == 3u) ? "> INPUTS" : "  INPUTS");
+    lcd_draw_text_line(5u, (s_menu_index == 4u) ? "> FIDO WIPE" : "  FIDO WIPE");
     snprintf(line, sizeof(line), "POS:%ld", (long)s_last_encoder_position);
-    lcd_draw_text_line(5u, line);
-    snprintf(line, sizeof(line), "A:%u B:%u K:%u", s_last_enc_a, s_last_enc_b, s_last_enc_btn);
     lcd_draw_text_line(6u, line);
-    snprintf(line, sizeof(line), "EV:%08lX", s_last_events);
+    snprintf(line, sizeof(line), "A:%u B:%u K:%u", s_last_enc_a, s_last_enc_b, s_last_enc_btn);
     lcd_draw_text_line(7u, line);
-    lcd_draw_text_line(8u, "SHORT ENTER");
-    lcd_draw_text_line(9u, "LONG BACK");
+    snprintf(line, sizeof(line), "EV:%08lX", s_last_events);
+    lcd_draw_text_line(8u, line);
+    lcd_draw_text_line(9u, "SHORT ENTER");
+    lcd_draw_text_line(10u, "LONG BACK");
 }
 
 static void lcd_draw_usb_page(void) {
@@ -321,6 +323,21 @@ static void lcd_draw_input_page(void) {
     lcd_draw_text_line(7u, "LONG:PURPLE");
 }
 
+static void lcd_draw_fido_wipe_page(void) {
+    lcd_draw_shell(k_title_security, "WIPE");
+    lcd_draw_text_line(1u, "CLEAR FIDO STORE");
+    lcd_draw_text_line(3u, "SHORT: ERASE");
+    lcd_draw_text_line(4u, "LONG : BACK");
+    if (s_last_fido_store_result == 1u) {
+        lcd_draw_text_line(6u, "DONE");
+    } else if (s_last_fido_store_result == 2u) {
+        lcd_draw_text_line(6u, "ERASE FAIL");
+    } else {
+        lcd_draw_text_line(6u, "READY");
+    }
+    lcd_draw_text_line(8u, "RE-REGISTER KEY");
+}
+
 static void lcd_draw_fido_popup(void)
 {
     const char *cmd_text = "SECURITY";
@@ -355,6 +372,9 @@ static void lcd_redraw_page(void) {
             break;
         case 2u:
             lcd_draw_flash_page();
+            break;
+        case 4u:
+            lcd_draw_fido_wipe_page();
             break;
         default:
             lcd_draw_input_page();
@@ -407,6 +427,7 @@ void lcd_status_init(void) {
     s_menu_index = 0u;
     s_active_app = 0u;
     s_page_dirty = 1u;
+    s_last_fido_store_result = 0u;
 
     ls013_lcd_init();
     lcd_redraw_page();
@@ -440,6 +461,17 @@ void lcd_status_back(void) {
     if (s_menu_active == 0u) {
         s_menu_active = 1u;
         s_menu_index = s_active_app;
+        s_page_dirty = 1u;
+    }
+}
+
+uint8_t lcd_status_get_active_app(void) {
+    return s_active_app;
+}
+
+void lcd_status_set_fido_store_result(uint8_t result) {
+    if (s_last_fido_store_result != result) {
+        s_last_fido_store_result = result;
         s_page_dirty = 1u;
     }
 }

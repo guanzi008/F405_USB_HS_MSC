@@ -9,6 +9,8 @@ void lcd_status_next_page(void);
 void lcd_status_prev_page(void);
 void lcd_status_confirm(void);
 void lcd_status_back(void);
+uint8_t lcd_status_get_active_app(void);
+void lcd_status_set_fido_store_result(uint8_t result);
 void lcd_status_tick(uint32_t now_ms);
 void lcd_status_update(uint8_t dev_state,
                        uint8_t dev_config,
