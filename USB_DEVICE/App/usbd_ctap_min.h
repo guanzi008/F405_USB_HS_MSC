@@ -7,6 +7,7 @@
 #define CTAP_CMD_MAKE_CREDENTIAL 0x01U
 #define CTAP_CMD_GET_ASSERTION   0x02U
 #define CTAP_CMD_GET_INFO        0x04U
+#define CTAP_CMD_RESET           0x07U
 
 #define CTAP_STATUS_OK                 0x00U
 #define CTAP_ERR_INVALID_COMMAND       0x01U

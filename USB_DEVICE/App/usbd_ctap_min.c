@@ -1619,6 +1619,20 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
     case CTAP_CMD_GET_ASSERTION:
       return usbd_ctap_min_handle_get_assertion(req, req_len, resp, resp_cap, resp_len);
 
+    case CTAP_CMD_RESET:
+      ctap_diag_note_request(CTAP_CMD_RESET, 0U, 0U, 0U);
+      if (req_len != 1U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+      }
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
+      s_ctap_pending_cmd = CTAP_CMD_RESET;
+      s_ctap_ui_state = USBD_CTAP_UI_WAIT_TOUCH;
+      s_ctap_user_presence_latched = 0U;
+      *resp_len = 0U;
+      return USBD_CTAP_MIN_PENDING;
+
     default:
       s_ctap_ui_state = USBD_CTAP_UI_IDLE;
       s_ctap_pending_cmd = 0U;
@@ -1759,6 +1773,20 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     s_ctap_selection_count = 0U;
     s_ctap_selection_index = 0U;
     ctap_remember_recent_approval(cmd, req, req_len);
+    ctap_diag_note_status(CTAP_STATUS_OK);
+    return USBD_CTAP_MIN_DONE;
+  }
+
+  if (cmd == CTAP_CMD_RESET)
+  {
+    s_ctap_selection_count = 0U;
+    s_ctap_selection_index = 0U;
+    if (fido_store_clear() == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+    }
+    resp[0] = CTAP_STATUS_OK;
+    *resp_len = 1U;
     ctap_diag_note_status(CTAP_STATUS_OK);
     return USBD_CTAP_MIN_DONE;
   }

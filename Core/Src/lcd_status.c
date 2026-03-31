@@ -342,6 +342,7 @@ static void lcd_draw_security_page(void) {
         case 0x01u: cmd_text = "MC"; break;
         case 0x02u: cmd_text = "GA"; break;
         case 0x04u: cmd_text = "GI"; break;
+        case 0x07u: cmd_text = "RST"; break;
         default: cmd_text = "--"; break;
     }
     snprintf(line, sizeof(line), "RX:%lu TX:%lu", s_last_fido_rx_count, s_last_fido_tx_count);
@@ -471,12 +472,15 @@ static void lcd_draw_fido_delete_page(void) {
 static void lcd_draw_fido_popup(void)
 {
     lcd_zh_id_t cmd_text = LCD_ZH_GET_INFO;
+    uint8_t draw_reset_text = 0u;
     char line[24];
 
     if (s_last_fido_pending_cmd == CTAP_CMD_MAKE_CREDENTIAL) {
         cmd_text = LCD_ZH_MAKE_CRED;
     } else if (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION) {
         cmd_text = LCD_ZH_GET_ASSERT;
+    } else if (s_last_fido_pending_cmd == CTAP_CMD_RESET) {
+        draw_reset_text = 1u;
     }
 
     ls013_lcd_rect(8u, 8u, 112u, 112u, 0u);
@@ -484,7 +488,11 @@ static void lcd_draw_fido_popup(void)
     ls013_lcd_frame(10u, 10u, 108u, 108u, 1u);
     ls013_lcd_rect(14u, 14u, 74u, 18u, 1u);
     lcd_draw_zh_invert_at(20u, 17u, LCD_ZH_FIDO_CONFIRM);
-    lcd_draw_zh_at(20u, 40u, 88u, cmd_text);
+    if (draw_reset_text != 0u) {
+        lcd_draw_text_at(20u, 43u, 88u, "AUTH RESET");
+    } else {
+        lcd_draw_zh_at(20u, 40u, 88u, cmd_text);
+    }
     if ((s_last_fido_selection_count > 1u) && (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION)) {
         lcd_draw_zh_at(20u, 56u, 28u, LCD_ZH_ACCOUNT);
         snprintf(line, sizeof(line), "%u/%u",
