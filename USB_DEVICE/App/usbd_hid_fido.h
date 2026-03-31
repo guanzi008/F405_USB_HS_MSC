@@ -66,5 +66,8 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
                                uint8_t *response,
                                uint16_t response_cap,
                                uint32_t now_ms);
+uint16_t usbd_hid_fido_continue(usbd_hid_fido_state_t *state,
+                                uint8_t *response,
+                                uint16_t response_cap);
 
 #endif

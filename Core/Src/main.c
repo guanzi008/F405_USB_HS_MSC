@@ -123,8 +123,20 @@ int main(void)
     usbd_ctap_min_ui_status_t fido_ui;
     uint32_t input_events;
     uint32_t now = HAL_GetTick();
+    uint8_t uart_rx = 0u;
 
     input_events = aux_inputs_poll(now);
+    if (HAL_UART_Receive(&huart4, &uart_rx, 1u, 0u) == HAL_OK)
+    {
+      if ((uart_rx == 'y') || (uart_rx == 'Y'))
+      {
+        usbd_ctap_min_note_user_presence();
+      }
+      else if ((uart_rx == 'n') || (uart_rx == 'N'))
+      {
+        usbd_ctap_min_note_user_denied();
+      }
+    }
     if ((input_events & AUX_INPUT_EVENT_BTN_SHORT) != 0u)
     {
       usbd_ctap_min_get_ui_status(&fido_ui);

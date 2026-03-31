@@ -435,6 +435,22 @@ static uint8_t USBD_FIDO_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
   }
 
   hfido->state = USBD_FIDO_IDLE;
+  if (hfido->fido.tx_active != 0U)
+  {
+    uint16_t tx_len = usbd_hid_fido_continue(&hfido->fido,
+                                             hfido->tx_report,
+                                             (uint16_t)sizeof(hfido->tx_report));
+
+    if (tx_len != 0U)
+    {
+      in_ep_add = USBD_FIDO_GetInEpAdd(pdev, (uint8_t)pdev->classId);
+      hfido->state = USBD_FIDO_BUSY;
+      hfido->tx_len = tx_len;
+      (void)USBD_LL_Transmit(pdev, in_ep_add, hfido->tx_report, tx_len);
+      return (uint8_t)USBD_OK;
+    }
+  }
+
   if ((hfido->pending_tx != 0U) && (hfido->pending_tx_len != 0U))
   {
     in_ep_add = USBD_FIDO_GetInEpAdd(pdev, (uint8_t)pdev->classId);

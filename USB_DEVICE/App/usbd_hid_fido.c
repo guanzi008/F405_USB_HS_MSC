@@ -96,6 +96,62 @@ static void fido_queue_error(usbd_hid_fido_state_t *state, uint32_t cid, uint8_t
   fido_start_tx(state, cid, FIDO_HID_CMD_ERROR, 1U);
 }
 
+static uint16_t fido_emit_tx_packet(usbd_hid_fido_state_t *state,
+                                    uint8_t *response,
+                                    uint16_t response_cap)
+{
+  uint16_t copy_len;
+
+  if ((state == NULL) || (response == NULL) || (response_cap < FIDO_HID_PACKET_SIZE) || (state->tx_active == 0U))
+  {
+    return 0U;
+  }
+
+  memset(response, 0, response_cap);
+  fido_store_be32(response, state->tx_cid);
+
+  if (state->tx_offset == 0U)
+  {
+    response[4] = (uint8_t)(0x80U | state->tx_cmd);
+    response[5] = (uint8_t)(state->tx_len >> 8);
+    response[6] = (uint8_t)(state->tx_len);
+    copy_len = state->tx_len;
+    if (copy_len > (FIDO_HID_PACKET_SIZE - 7U))
+    {
+      copy_len = FIDO_HID_PACKET_SIZE - 7U;
+    }
+    if (copy_len != 0U)
+    {
+      memcpy(&response[7], state->tx_buf, copy_len);
+    }
+  }
+  else
+  {
+    response[4] = state->tx_seq++;
+    copy_len = (uint16_t)(state->tx_len - state->tx_offset);
+    if (copy_len > (FIDO_HID_PACKET_SIZE - 5U))
+    {
+      copy_len = FIDO_HID_PACKET_SIZE - 5U;
+    }
+    if (copy_len != 0U)
+    {
+      memcpy(&response[5], &state->tx_buf[state->tx_offset], copy_len);
+    }
+  }
+
+  state->tx_offset = (uint16_t)(state->tx_offset + copy_len);
+  if (state->tx_offset >= state->tx_len)
+  {
+    state->tx_active = 0U;
+    state->tx_offset = 0U;
+    state->tx_len = 0U;
+    state->tx_seq = 0U;
+  }
+
+  fido_diag_note_tx(response, FIDO_HID_PACKET_SIZE, response[4]);
+  return FIDO_HID_PACKET_SIZE;
+}
+
 static uint32_t fido_allocate_cid(usbd_hid_fido_state_t *state)
 {
   uint32_t cid = state->next_cid;
@@ -296,54 +352,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
     }
   }
 
-  if (state->tx_active == 0U)
-  {
-    return 0U;
-  }
-
-  memset(response, 0, response_cap);
-  fido_store_be32(response, state->tx_cid);
-
-  if (state->tx_offset == 0U)
-  {
-    response[4] = (uint8_t)(0x80U | state->tx_cmd);
-    response[5] = (uint8_t)(state->tx_len >> 8);
-    response[6] = (uint8_t)(state->tx_len);
-    copy_len = state->tx_len;
-    if (copy_len > (FIDO_HID_PACKET_SIZE - 7U))
-    {
-      copy_len = FIDO_HID_PACKET_SIZE - 7U;
-    }
-    if (copy_len != 0U)
-    {
-      memcpy(&response[7], state->tx_buf, copy_len);
-    }
-  }
-  else
-  {
-    response[4] = state->tx_seq++;
-    copy_len = (uint16_t)(state->tx_len - state->tx_offset);
-    if (copy_len > (FIDO_HID_PACKET_SIZE - 5U))
-    {
-      copy_len = FIDO_HID_PACKET_SIZE - 5U;
-    }
-    if (copy_len != 0U)
-    {
-      memcpy(&response[5], &state->tx_buf[state->tx_offset], copy_len);
-    }
-  }
-
-  state->tx_offset = (uint16_t)(state->tx_offset + copy_len);
-  if (state->tx_offset >= state->tx_len)
-  {
-    state->tx_active = 0U;
-    state->tx_offset = 0U;
-    state->tx_len = 0U;
-    state->tx_seq = 0U;
-  }
-
-  fido_diag_note_tx(response, FIDO_HID_PACKET_SIZE, response[4]);
-  return FIDO_HID_PACKET_SIZE;
+  return fido_emit_tx_packet(state, response, response_cap);
 }
 
 uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
@@ -410,40 +419,12 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
     fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
   }
 
-  if (state->tx_active == 0U)
-  {
-    return 0U;
-  }
+  return fido_emit_tx_packet(state, response, response_cap);
+}
 
-  memset(response, 0, response_cap);
-  fido_store_be32(response, state->tx_cid);
-  response[4] = (uint8_t)(0x80U | state->tx_cmd);
-  response[5] = (uint8_t)(state->tx_len >> 8);
-  response[6] = (uint8_t)(state->tx_len);
-  resp_len = state->tx_len;
-  if (resp_len > (FIDO_HID_PACKET_SIZE - 7U))
-  {
-    resp_len = FIDO_HID_PACKET_SIZE - 7U;
-  }
-  if (resp_len != 0U)
-  {
-    memcpy(&response[7], state->tx_buf, resp_len);
-  }
-
-  state->tx_offset = resp_len;
-  if (state->tx_offset >= state->tx_len)
-  {
-    state->tx_active = 0U;
-    state->tx_offset = 0U;
-    state->tx_len = 0U;
-    state->tx_seq = 0U;
-  }
-  else
-  {
-    state->tx_active = 1U;
-    state->tx_seq = 0U;
-  }
-
-  fido_diag_note_tx(response, FIDO_HID_PACKET_SIZE, response[4]);
-  return FIDO_HID_PACKET_SIZE;
+uint16_t usbd_hid_fido_continue(usbd_hid_fido_state_t *state,
+                                uint8_t *response,
+                                uint16_t response_cap)
+{
+  return fido_emit_tx_packet(state, response, response_cap);
 }
