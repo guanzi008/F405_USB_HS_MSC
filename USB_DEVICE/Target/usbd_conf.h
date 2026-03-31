@@ -63,7 +63,7 @@
   */
 
 /*---------- -----------*/
-#define USBD_MAX_NUM_INTERFACES     1U
+#define USBD_MAX_NUM_INTERFACES     3U
 /*---------- -----------*/
 #define USBD_MAX_NUM_CONFIGURATION     1U
 /*---------- -----------*/
@@ -76,6 +76,25 @@
 #define USBD_SELF_POWERED     1U
 /*---------- -----------*/
 #define MSC_MEDIA_PACKET     8192U
+
+#define USE_USB_HS
+#define USE_USBD_COMPOSITE
+#define USBD_CMPSIT_ACTIVATE_HID 1U
+#define USBD_CMPSIT_ACTIVATE_MSC 1U
+#define USBD_MAX_SUPPORTED_CLASS 3U
+#define USBD_MAX_CLASS_ENDPOINTS 3U
+#define USBD_MAX_CLASS_INTERFACES 2U
+#define USBD_CMPST_MAX_CONFDESC_SZ 128U
+
+#define DAP_HID_EPIN_ADDR  0x81U
+#define DAP_HID_EPOUT_ADDR 0x03U
+#define FIDO_HID_EPIN_ADDR 0x83U
+#define FIDO_HID_EPOUT_ADDR 0x05U
+#define HID_EPIN_ADDR  DAP_HID_EPIN_ADDR
+#define HID_EPOUT_ADDR DAP_HID_EPOUT_ADDR
+#define MSC_EPIN_ADDR  0x82U
+#define MSC_EPOUT_ADDR 0x01U
+#define FIDO_STORAGE_RESERVED_BYTES (1024U * 1024U)
 
 /****************************************/
 /* #define for FS and HS identification */
@@ -154,6 +173,96 @@
 /* Exported functions -------------------------------------------------------*/
 void *USBD_static_malloc(uint32_t size);
 void USBD_static_free(void *p);
+
+typedef struct
+{
+  uint32_t irq_count;
+  uint32_t reset_count;
+  uint32_t setup_count;
+  uint32_t data_out_count;
+  uint32_t data_in_count;
+  uint32_t suspend_count;
+  uint32_t resume_count;
+  uint32_t connect_count;
+  uint32_t disconnect_count;
+  uint32_t activate_setup_count;
+  uint32_t ep0_out_start_count;
+  uint32_t open_ep_count;
+  uint32_t open_ep_fail_count;
+  uint32_t last_open_ep_addr;
+  uint32_t last_open_ep_type;
+  uint32_t last_open_ep_mps;
+  uint32_t last_open_ep_status;
+  uint32_t malloc_call_count;
+  uint32_t malloc_fail_count;
+  uint32_t malloc_last_size;
+  uint32_t malloc_last_words;
+  uint32_t malloc_last_start;
+  uint32_t malloc_last_limit;
+  uint32_t malloc_last_ptr;
+  uint32_t malloc_last_offset;
+  uint32_t malloc_alloc_count;
+  uint32_t cmsis_rx_count;
+  uint32_t cmsis_tx_count;
+  uint32_t cmsis_last_req_len;
+  uint32_t cmsis_last_rsp_len;
+  uint32_t cmsis_last_req_word0;
+  uint32_t cmsis_last_req_word1;
+  uint32_t cmsis_last_rsp_word0;
+  uint32_t cmsis_last_rsp_word1;
+  uint32_t hid_setup_count;
+  uint32_t hid_last_class;
+  uint32_t hid_last_bmRequest;
+  uint32_t hid_last_bRequest;
+  uint32_t hid_last_wValue;
+  uint32_t hid_last_wIndex;
+  uint32_t hid_last_wLength;
+  uint32_t hid_last_report_len;
+  uint32_t itf_req_count;
+  uint32_t itf_last_index;
+  uint32_t itf_last_class;
+  uint32_t itf_last_bmRequest;
+  uint32_t itf_last_bRequest;
+  uint32_t itf_last_status;
+  uint32_t fido_rx_count;
+  uint32_t fido_tx_count;
+  uint32_t fido_last_req_len;
+  uint32_t fido_last_rsp_len;
+  uint32_t fido_last_req_word0;
+  uint32_t fido_last_req_word1;
+  uint32_t fido_last_rsp_word0;
+  uint32_t fido_last_rsp_word1;
+  uint32_t fido_last_status;
+  uint32_t set_cfg_call_count;
+  uint32_t last_set_cfg_class;
+  uint32_t last_set_cfg_cfgidx;
+  uint32_t last_set_cfg_status;
+  uint32_t set_cfg_fail_class;
+  uint32_t set_cfg_fail_status;
+  uint32_t last_setup_word0;
+  uint32_t last_setup_word1;
+  uint32_t gintsts;
+  uint32_t gintmsk;
+  uint32_t gotgctl;
+  uint32_t gotgint;
+  uint32_t gusbcfg;
+  uint32_t gccfg;
+  uint32_t dcfg;
+  uint32_t dsts;
+  uint32_t dctl;
+  uint32_t daint;
+  uint32_t daintmsk;
+  uint32_t diepint0;
+  uint32_t doepint0;
+  uint32_t doeptsiz0;
+} A_USB_DiagRuntime;
+
+extern volatile A_USB_DiagRuntime g_a_usb_diag_runtime;
+
+void a_usb_diag_note_irq(void);
+void a_usb_diag_note_activate_setup(void);
+void a_usb_diag_note_ep0_out_start(void);
+void a_usb_diag_capture_registers(void);
 
 /**
   * @}

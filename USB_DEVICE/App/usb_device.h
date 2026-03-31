@@ -59,25 +59,27 @@
 
 
 /**
- * @brief USB HS MSC 初始化
- * 
- * @return USBD_StatusTypeDef 
+ * @brief USB HS HID + MSC 复合设备初始化
+ *
+ * @return USBD_StatusTypeDef
  */
-USBD_StatusTypeDef My_USB_HS_MSC_Init(void);
+USBD_StatusTypeDef My_USB_HS_HID_MSC_Init(void);
+
+USBD_StatusTypeDef My_USB_HS_HID_Init(void);
 
 /**
- * @brief USB HS MSC 反初始化
- * 
- * @return USBD_StatusTypeDef 
+ * @brief USB HS HID 反初始化
+ *
+ * @return USBD_StatusTypeDef
  */
-USBD_StatusTypeDef My_USB_HS_MSC_DeInit(void);
+USBD_StatusTypeDef My_USB_HS_HID_DeInit(void);
 /* USER CODE END PFP */
 
 /*
  * -- Insert your variables declaration here --
  */
 /* USER CODE BEGIN VARIABLES */
-extern USBD_HandleTypeDef hUsbDeviceFS;
+extern USBD_HandleTypeDef hUsbDeviceHS;
 /* USER CODE END VARIABLES */
 /**
   * @}

@@ -62,13 +62,13 @@
   * @{
   */
 
-#define USBD_VID     1155
+#define USBD_VID     51966
 #define USBD_LANGID_STRING     1033
-#define USBD_MANUFACTURER_STRING     "STMicroelectronics"
-#define USBD_PID_HS     22314
-#define USBD_PRODUCT_STRING_HS     "STM32 Mass Storage"
-#define USBD_CONFIGURATION_STRING_HS     "MSC Config"
-#define USBD_INTERFACE_STRING_HS     "MSC Interface"
+#define USBD_MANUFACTURER_STRING     "UltraLink"
+#define USBD_PID_HS     16393
+#define USBD_PRODUCT_STRING_HS     "UltraLink CMSIS-DAP FIDO MSC"
+#define USBD_CONFIGURATION_STRING_HS     "CMSIS-DAP + FIDO + MSC"
+#define USBD_INTERFACE_STRING_HS     "CMSIS-DAP v1"
 
 #define USB_SIZ_BOS_DESC            0x0C
 
@@ -174,7 +174,7 @@ __ALIGN_BEGIN uint8_t USBD_HS_DeviceDesc[USB_LEN_DEV_DESC] __ALIGN_END =
   HIBYTE(USBD_VID),           /*idVendor*/
   LOBYTE(USBD_PID_HS),        /*idProduct*/
   HIBYTE(USBD_PID_HS),        /*idProduct*/
-  0x00,                       /*bcdDevice rel. 2.00*/
+  0x01,                       /*bcdDevice rel. 2.01*/
   0x02,
   USBD_IDX_MFC_STR,           /*Index of manufacturer  string*/
   USBD_IDX_PRODUCT_STR,       /*Index of product string*/

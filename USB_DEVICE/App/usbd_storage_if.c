@@ -22,7 +22,8 @@
 #include "usbd_storage_if.h"
 
 /* USER CODE BEGIN INCLUDE */
-#include "sdio.h"
+#include <string.h>
+#include "ext_flash_w25q.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,6 +32,9 @@
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+static uint8_t s_storage_ready = 0U;
+static uint32_t s_storage_block_nbr = 0U;
+static uint32_t s_storage_visible_bytes = 0U;
 
 /* USER CODE END PV */
 
@@ -63,7 +67,6 @@
   */
 
 #define STORAGE_LUN_NBR                  1
-#define STORAGE_BLK_NBR                  0x10000
 #define STORAGE_BLK_SIZ                  0x200
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
@@ -105,9 +108,9 @@ const int8_t STORAGE_Inquirydata_HS[] = {/* 36 */
   0x00,
   0x00,
   0x00,
-  'S', 'T', 'M', ' ', ' ', ' ', ' ', ' ', /* Manufacturer : 8 bytes */
-  'P', 'r', 'o', 'd', 'u', 'c', 't', ' ', /* Product      : 16 Bytes */
-  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+  'W', 'I', 'N', 'B', 'O', 'N', 'D', ' ', /* Manufacturer : 8 bytes */
+  'W', '2', '5', 'Q', ' ', 'F', 'l', 'a', /* Product      : 16 Bytes */
+  's', 'h', ' ', ' ', ' ', ' ', ' ', ' ',
   '0', '.', '0' ,'1'                      /* Version      : 4 Bytes */
 };
 /* USER CODE END INQUIRY_DATA_HS */
@@ -178,14 +181,37 @@ USBD_StorageTypeDef USBD_Storage_Interface_fops_HS =
 int8_t STORAGE_Init_HS(uint8_t lun)
 {
   /* USER CODE BEGIN 9 */
-  // UNUSED(lun);
+  ext_flash_info_t flash_info;
 
-  // return (USBD_OK);
+  UNUSED(lun);
 
-    if(My_SDIO_SD_Init_Fixed() == HAL_OK)
-      return (USBD_OK);
-    else
-      return USBD_FAIL;
+  ext_flash_get_info(&flash_info);
+  if ((flash_info.present == 0U) && (ext_flash_probe() == 0U))
+  {
+    s_storage_ready = 0U;
+    s_storage_block_nbr = 0U;
+    s_storage_visible_bytes = 0U;
+    return USBD_FAIL;
+  }
+
+  ext_flash_get_info(&flash_info);
+  if (flash_info.capacity_bytes > FIDO_STORAGE_RESERVED_BYTES)
+  {
+    s_storage_visible_bytes = flash_info.capacity_bytes - FIDO_STORAGE_RESERVED_BYTES;
+  }
+  else
+  {
+    s_storage_visible_bytes = 0U;
+  }
+  s_storage_block_nbr = s_storage_visible_bytes / STORAGE_BLK_SIZ;
+  s_storage_ready = (s_storage_block_nbr != 0U) ? 1U : 0U;
+
+  if (s_storage_ready == 0U)
+  {
+    return USBD_FAIL;
+  }
+
+  return USBD_OK;
   /* USER CODE END 9 */
 }
 
@@ -199,24 +225,10 @@ int8_t STORAGE_Init_HS(uint8_t lun)
 int8_t STORAGE_GetCapacity_HS(uint8_t lun, uint32_t *block_num, uint16_t *block_size)
 {
   /* USER CODE BEGIN 10 */
-  // UNUSED(lun);
+  UNUSED(lun);
 
-  // *block_num  = STORAGE_BLK_NBR;
-  // *block_size = STORAGE_BLK_SIZ;
-  // return (USBD_OK);
-
-  HAL_SD_CardInfoTypeDef cardInfo;
-  HAL_StatusTypeDef res = HAL_SD_GetCardInfo(&hsd, &cardInfo);
-	if(res == HAL_OK)
-	{
-		*block_num  = cardInfo.BlockNbr;    //块的个数
-		*block_size = cardInfo.BlockSize;   //块大小=512字节
-	}
-	else
-	{
-		*block_num  = STORAGE_BLK_NBR;	    //0x10000
-		*block_size = STORAGE_BLK_SIZ;      //块大小=512字节
-	}
+  *block_num  = s_storage_block_nbr;
+  *block_size = STORAGE_BLK_SIZ;
 
   return (USBD_OK);
   /* USER CODE END 10 */
@@ -230,14 +242,8 @@ int8_t STORAGE_GetCapacity_HS(uint8_t lun, uint32_t *block_num, uint16_t *block_
 int8_t STORAGE_IsReady_HS(uint8_t lun)
 {
   /* USER CODE BEGIN 11 */
-  // UNUSED(lun);
-
-  // return (USBD_OK);
-
-  if(HAL_SD_GetCardState(&hsd) == HAL_SD_CARD_TRANSFER)
-    return USBD_OK;
-  else
-    return USBD_FAIL;
+  UNUSED(lun);
+  return (s_storage_ready != 0U) ? USBD_OK : USBD_FAIL;
   /* USER CODE END 11 */
 }
 
@@ -249,6 +255,7 @@ int8_t STORAGE_IsReady_HS(uint8_t lun)
 int8_t STORAGE_IsWriteProtected_HS(uint8_t lun)
 {
   /* USER CODE BEGIN 12 */
+  UNUSED(lun);
   return (USBD_OK);
   /* USER CODE END 12 */
 }
@@ -264,32 +271,17 @@ int8_t STORAGE_IsWriteProtected_HS(uint8_t lun)
 int8_t STORAGE_Read_HS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t blk_len)
 {
   /* USER CODE BEGIN 13 */
-  // UNUSED(lun);
-  // UNUSED(buf);
-  // UNUSED(blk_addr);
-  // UNUSED(blk_len);
+  UNUSED(lun);
 
-  // return (USBD_OK);
-
-  // //直接读取
-	// HAL_StatusTypeDef res = HAL_ERROR;
-  // __disable_irq();//关闭中断，SD卡读写过程不应被打断
-  // res = My_SD_ReadBlocks(buf, blk_addr, blk_len);
-  // __enable_irq();//开启中断
-  // if(res == HAL_OK)
-  //   return USBD_OK;
-  // else
-  //   return USBD_FAIL;
-  
-  //DMA方式
-	if(My_SD_ReadBlocks_DMA(buf, blk_addr, blk_len) == HAL_OK)
-	{    
-		return (USBD_OK);
-	}
-	else
+  if ((s_storage_ready == 0U) ||
+      ((blk_addr + blk_len) > s_storage_block_nbr))
   {
     return (USBD_FAIL);
   }
+
+  return (ext_flash_read(blk_addr * STORAGE_BLK_SIZ,
+                         buf,
+                         (uint32_t)blk_len * STORAGE_BLK_SIZ) != 0U) ? USBD_OK : USBD_FAIL;
   /* USER CODE END 13 */
 }
 
@@ -304,32 +296,17 @@ int8_t STORAGE_Read_HS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t bl
 int8_t STORAGE_Write_HS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t blk_len)
 {
   /* USER CODE BEGIN 14 */
-  // UNUSED(lun);
-  // UNUSED(buf);
-  // UNUSED(blk_addr);
-  // UNUSED(blk_len);
+  UNUSED(lun);
 
-  // return (USBD_OK);
-
-  // //直接写	
-	// HAL_StatusTypeDef res = HAL_ERROR;
-  // __disable_irq();//关闭中断，SD卡读写过程不应被打断
-  // res = My_SD_WriteBlocks(buf, blk_addr, blk_len);
-  // __enable_irq();//开启中断
-  // if(res == HAL_OK)
-  //   return USBD_OK;
-  // else
-  //   return USBD_FAIL;
-
-  //DMA  
-	if (My_SD_WriteBlocks_DMA(buf, blk_addr, blk_len) == HAL_OK)
-	{
-		return (USBD_OK);
-	}
-	else
+  if ((s_storage_ready == 0U) ||
+      ((blk_addr + blk_len) > s_storage_block_nbr))
   {
     return (USBD_FAIL);
   }
+
+  return (ext_flash_write(blk_addr * STORAGE_BLK_SIZ,
+                          buf,
+                          (uint32_t)blk_len * STORAGE_BLK_SIZ) != 0U) ? USBD_OK : USBD_FAIL;
   /* USER CODE END 14 */
 }
 

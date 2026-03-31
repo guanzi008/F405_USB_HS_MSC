@@ -467,6 +467,8 @@ USBD_StatusTypeDef USBD_SetClassConfig(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   USBD_StatusTypeDef ret = USBD_OK;
 
 #ifdef USE_USBD_COMPOSITE
+  g_a_usb_diag_runtime.set_cfg_call_count++;
+  uint32_t configured_classes = 0U;
   /* Parse the table of classes in use */
   for (uint32_t i = 0U; i < USBD_MAX_SUPPORTED_CLASS; i++)
   {
@@ -476,11 +478,30 @@ USBD_StatusTypeDef USBD_SetClassConfig(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
       if (pdev->pClass[i] != NULL)
       {
         pdev->classId = i;
+        g_a_usb_diag_runtime.last_set_cfg_class = i;
+        g_a_usb_diag_runtime.last_set_cfg_cfgidx = cfgidx;
         /* Set configuration  and Start the Class*/
-        if (pdev->pClass[i]->Init(pdev, cfgidx) != 0U)
+        g_a_usb_diag_runtime.last_set_cfg_status =
+            (uint32_t)pdev->pClass[i]->Init(pdev, cfgidx);
+        if (g_a_usb_diag_runtime.last_set_cfg_status != 0U)
         {
+          g_a_usb_diag_runtime.set_cfg_fail_class = i;
+          g_a_usb_diag_runtime.set_cfg_fail_status =
+              g_a_usb_diag_runtime.last_set_cfg_status;
+          for (uint32_t j = configured_classes; j > 0U; j--)
+          {
+            uint32_t rollback = j - 1U;
+            if ((pdev->tclasslist[rollback].Active == 1U) &&
+                (pdev->pClass[rollback] != NULL))
+            {
+              pdev->classId = rollback;
+              (void)pdev->pClass[rollback]->DeInit(pdev, cfgidx);
+            }
+          }
           ret = USBD_FAIL;
+          break;
         }
+        configured_classes++;
       }
     }
   }

@@ -23,6 +23,8 @@
 #include "usb_device.h"
 #include "usbd_core.h"
 #include "usbd_desc.h"
+#include "usbd_composite_builder.h"
+#include "usbd_hid.h"
 #include "usbd_msc.h"
 #include "usbd_storage_if.h"
 
@@ -32,6 +34,9 @@
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+static uint8_t s_dap_hid_ep_add[2] = { DAP_HID_EPIN_ADDR, DAP_HID_EPOUT_ADDR };
+static uint8_t s_fido_hid_ep_add[2] = { FIDO_HID_EPIN_ADDR, FIDO_HID_EPOUT_ADDR };
+static uint8_t s_msc_ep_add[2] = { MSC_EPIN_ADDR, MSC_EPOUT_ADDR };
 
 /* USER CODE END PV */
 
@@ -54,20 +59,42 @@ USBD_HandleTypeDef hUsbDeviceHS;
  * -- Insert your external function declaration here --
  */
 /* USER CODE BEGIN 1 */
-USBD_StatusTypeDef My_USB_HS_MSC_Init(void)
+USBD_StatusTypeDef My_USB_HS_HID_MSC_Init(void)
 {
   USBD_StatusTypeDef result;
+  uint32_t msc_class_id;
 
   /* Init Device Library, add supported class and start the library. */
   result = USBD_Init(&hUsbDeviceHS, &HS_Desc, DEVICE_HS);
   if (result != USBD_OK)
     return result;
-  
-  result = USBD_RegisterClass(&hUsbDeviceHS, &USBD_MSC);
+
+  result = USBD_RegisterClassComposite(&hUsbDeviceHS,
+                                       &USBD_HID,
+                                       CLASS_TYPE_HID,
+                                       s_dap_hid_ep_add);
   if (result != USBD_OK)
     return result;
 
-  result = USBD_MSC_RegisterStorage(&hUsbDeviceHS, &USBD_Storage_Interface_fops_HS);
+  result = USBD_RegisterClassComposite(&hUsbDeviceHS,
+                                       &USBD_HID,
+                                       CLASS_TYPE_CHID,
+                                       s_fido_hid_ep_add);
+  if (result != USBD_OK)
+    return result;
+
+  result = USBD_RegisterClassComposite(&hUsbDeviceHS,
+                                       &USBD_MSC,
+                                       CLASS_TYPE_MSC,
+                                       s_msc_ep_add);
+  if (result != USBD_OK)
+    return result;
+
+  msc_class_id = USBD_CMPSIT_SetClassID(&hUsbDeviceHS, CLASS_TYPE_MSC, 0U);
+  if (msc_class_id == 0xFFU)
+    return USBD_FAIL;
+
+  result = (USBD_StatusTypeDef)USBD_MSC_RegisterStorage(&hUsbDeviceHS, &USBD_Storage_Interface_fops_HS);
   if (result != USBD_OK)
     return result;
 
@@ -76,7 +103,12 @@ USBD_StatusTypeDef My_USB_HS_MSC_Init(void)
   return result;
 }
 
-USBD_StatusTypeDef My_USB_HS_MSC_DeInit(void)
+USBD_StatusTypeDef My_USB_HS_HID_Init(void)
+{
+  return My_USB_HS_HID_MSC_Init();
+}
+
+USBD_StatusTypeDef My_USB_HS_HID_DeInit(void)
 {
   return USBD_DeInit(&hUsbDeviceHS);
 }
@@ -94,19 +126,7 @@ void MX_USB_DEVICE_Init(void)
   /* USER CODE END USB_DEVICE_Init_PreTreatment */
 
   /* Init Device Library, add supported class and start the library. */
-  if (USBD_Init(&hUsbDeviceHS, &HS_Desc, DEVICE_HS) != USBD_OK)
-  {
-    Error_Handler();
-  }
-  if (USBD_RegisterClass(&hUsbDeviceHS, &USBD_MSC) != USBD_OK)
-  {
-    Error_Handler();
-  }
-  if (USBD_MSC_RegisterStorage(&hUsbDeviceHS, &USBD_Storage_Interface_fops_HS) != USBD_OK)
-  {
-    Error_Handler();
-  }
-  if (USBD_Start(&hUsbDeviceHS) != USBD_OK)
+  if (My_USB_HS_HID_MSC_Init() != USBD_OK)
   {
     Error_Handler();
   }

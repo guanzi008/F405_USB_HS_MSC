@@ -169,6 +169,13 @@ USBD_StatusTypeDef USBD_StdItfReq(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef
   USBD_StatusTypeDef ret = USBD_OK;
   uint8_t idx;
 
+  g_a_usb_diag_runtime.itf_req_count++;
+  g_a_usb_diag_runtime.itf_last_index = (uint32_t)LOBYTE(req->wIndex);
+  g_a_usb_diag_runtime.itf_last_bmRequest = req->bmRequest;
+  g_a_usb_diag_runtime.itf_last_bRequest = req->bRequest;
+  g_a_usb_diag_runtime.itf_last_class = 0xFFU;
+  g_a_usb_diag_runtime.itf_last_status = 0xFFFFFFFFU;
+
   switch (req->bmRequest & USB_REQ_TYPE_MASK)
   {
     case USB_REQ_TYPE_CLASS:
@@ -186,22 +193,26 @@ USBD_StatusTypeDef USBD_StdItfReq(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef
             idx = USBD_CoreFindIF(pdev, LOBYTE(req->wIndex));
             if (((uint8_t)idx != 0xFFU) && (idx < USBD_MAX_SUPPORTED_CLASS))
             {
+              g_a_usb_diag_runtime.itf_last_class = idx;
               /* Call the class data out function to manage the request */
               if (pdev->pClass[idx]->Setup != NULL)
               {
                 pdev->classId = idx;
                 ret = (USBD_StatusTypeDef)(pdev->pClass[idx]->Setup(pdev, req));
+                g_a_usb_diag_runtime.itf_last_status = (uint32_t)ret;
               }
               else
               {
                 /* should never reach this condition */
                 ret = USBD_FAIL;
+                g_a_usb_diag_runtime.itf_last_status = (uint32_t)ret;
               }
             }
             else
             {
               /* No relative interface found */
               ret = USBD_FAIL;
+              g_a_usb_diag_runtime.itf_last_status = (uint32_t)ret;
             }
 
             if ((req->wLength == 0U) && (ret == USBD_OK))

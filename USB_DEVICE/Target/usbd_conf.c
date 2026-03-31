@@ -24,6 +24,7 @@
 #include "usbd_def.h"
 #include "usbd_core.h"
 
+#include "usbd_hid.h"
 #include "usbd_msc.h"
 
 /* USER CODE BEGIN Includes */
@@ -36,6 +37,7 @@
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+volatile A_USB_DiagRuntime g_a_usb_diag_runtime;
 
 /* USER CODE END PV */
 
@@ -58,6 +60,44 @@ USBD_StatusTypeDef USBD_Get_USB_Status(HAL_StatusTypeDef hal_status);
 /* Private functions ---------------------------------------------------------*/
 
 /* USER CODE BEGIN 1 */
+void a_usb_diag_note_irq(void)
+{
+  g_a_usb_diag_runtime.irq_count++;
+}
+
+void a_usb_diag_note_activate_setup(void)
+{
+  g_a_usb_diag_runtime.activate_setup_count++;
+}
+
+void a_usb_diag_note_ep0_out_start(void)
+{
+  g_a_usb_diag_runtime.ep0_out_start_count++;
+}
+
+void a_usb_diag_capture_registers(void)
+{
+  USB_OTG_GlobalTypeDef *usb = USB_OTG_HS;
+  USB_OTG_DeviceTypeDef *dev = (USB_OTG_DeviceTypeDef *)((uint32_t)usb + USB_OTG_DEVICE_BASE);
+  USB_OTG_INEndpointTypeDef *inep0 =
+      (USB_OTG_INEndpointTypeDef *)((uint32_t)usb + USB_OTG_IN_ENDPOINT_BASE);
+  USB_OTG_OUTEndpointTypeDef *outep0 =
+      (USB_OTG_OUTEndpointTypeDef *)((uint32_t)usb + USB_OTG_OUT_ENDPOINT_BASE);
+  g_a_usb_diag_runtime.gintsts = usb->GINTSTS;
+  g_a_usb_diag_runtime.gintmsk = usb->GINTMSK;
+  g_a_usb_diag_runtime.gotgctl = usb->GOTGCTL;
+  g_a_usb_diag_runtime.gotgint = usb->GOTGINT;
+  g_a_usb_diag_runtime.gusbcfg = usb->GUSBCFG;
+  g_a_usb_diag_runtime.gccfg = usb->GCCFG;
+  g_a_usb_diag_runtime.dcfg = dev->DCFG;
+  g_a_usb_diag_runtime.dsts = dev->DSTS;
+  g_a_usb_diag_runtime.dctl = dev->DCTL;
+  g_a_usb_diag_runtime.daint = dev->DAINT;
+  g_a_usb_diag_runtime.daintmsk = dev->DAINTMSK;
+  g_a_usb_diag_runtime.diepint0 = inep0->DIEPINT;
+  g_a_usb_diag_runtime.doepint0 = outep0->DOEPINT;
+  g_a_usb_diag_runtime.doeptsiz0 = outep0->DOEPTSIZ;
+}
 
 /* USER CODE END 1 */
 
@@ -179,6 +219,9 @@ static void PCD_SetupStageCallback(PCD_HandleTypeDef *hpcd)
 void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.setup_count++;
+  g_a_usb_diag_runtime.last_setup_word0 = ((uint32_t *)hpcd->Setup)[0];
+  g_a_usb_diag_runtime.last_setup_word1 = ((uint32_t *)hpcd->Setup)[1];
   USBD_LL_SetupStage((USBD_HandleTypeDef*)hpcd->pData, (uint8_t *)hpcd->Setup);
 }
 
@@ -194,6 +237,7 @@ static void PCD_DataOutStageCallback(PCD_HandleTypeDef *hpcd, uint8_t epnum)
 void HAL_PCD_DataOutStageCallback(PCD_HandleTypeDef *hpcd, uint8_t epnum)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.data_out_count++;
   USBD_LL_DataOutStage((USBD_HandleTypeDef*)hpcd->pData, epnum, hpcd->OUT_ep[epnum].xfer_buff);
 }
 
@@ -209,6 +253,7 @@ static void PCD_DataInStageCallback(PCD_HandleTypeDef *hpcd, uint8_t epnum)
 void HAL_PCD_DataInStageCallback(PCD_HandleTypeDef *hpcd, uint8_t epnum)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.data_in_count++;
   USBD_LL_DataInStage((USBD_HandleTypeDef*)hpcd->pData, epnum, hpcd->IN_ep[epnum].xfer_buff);
 }
 
@@ -237,6 +282,7 @@ static void PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
 void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.reset_count++;
   USBD_SpeedTypeDef speed = USBD_SPEED_FULL;
 
   if ( hpcd->Init.speed == PCD_SPEED_HIGH)
@@ -270,6 +316,7 @@ static void PCD_SuspendCallback(PCD_HandleTypeDef *hpcd)
 void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.suspend_count++;
   /* Inform USB library that core enters in suspend Mode. */
   USBD_LL_Suspend((USBD_HandleTypeDef*)hpcd->pData);
   __HAL_PCD_GATE_PHYCLOCK(hpcd);
@@ -295,6 +342,7 @@ static void PCD_ResumeCallback(PCD_HandleTypeDef *hpcd)
 void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.resume_count++;
   /* USER CODE BEGIN 3 */
 
   /* USER CODE END 3 */
@@ -342,6 +390,7 @@ static void PCD_ConnectCallback(PCD_HandleTypeDef *hpcd)
 void HAL_PCD_ConnectCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.connect_count++;
   USBD_LL_DevConnected((USBD_HandleTypeDef*)hpcd->pData);
 }
 
@@ -356,6 +405,7 @@ static void PCD_DisconnectCallback(PCD_HandleTypeDef *hpcd)
 void HAL_PCD_DisconnectCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
+  g_a_usb_diag_runtime.disconnect_count++;
   USBD_LL_DevDisconnected((USBD_HandleTypeDef*)hpcd->pData);
 }
 
@@ -407,9 +457,22 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
   HAL_PCD_RegisterIsoOutIncpltCallback(&hpcd_USB_OTG_HS, PCD_ISOOUTIncompleteCallback);
   HAL_PCD_RegisterIsoInIncpltCallback(&hpcd_USB_OTG_HS, PCD_ISOINIncompleteCallback);
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
+  /*
+   * Composite layout:
+   *   EP0 IN  = control
+   *   EP1 IN  = CMSIS-DAP HID interrupt
+   *   EP2 IN  = MSC bulk
+   *   EP3 IN  = FIDO HID interrupt
+   *
+   * Each active IN endpoint needs a dedicated Tx FIFO. Without the FIDO FIFO
+   * Linux can enumerate the composite device but the second HID interface
+   * times out during probe.
+   */
   HAL_PCDEx_SetRxFiFo(&hpcd_USB_OTG_HS, 0x200);
-  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 0, 0x80);
-  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 1, 0x174);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 0, 0x40);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 1, 0x40);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 2, 0x80);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 3, 0x40);
   }
   return USBD_OK;
 }
@@ -478,9 +541,18 @@ USBD_StatusTypeDef USBD_LL_OpenEP(USBD_HandleTypeDef *pdev, uint8_t ep_addr, uin
   HAL_StatusTypeDef hal_status = HAL_OK;
   USBD_StatusTypeDef usb_status = USBD_OK;
 
+  g_a_usb_diag_runtime.open_ep_count++;
+  g_a_usb_diag_runtime.last_open_ep_addr = ep_addr;
+  g_a_usb_diag_runtime.last_open_ep_type = ep_type;
+  g_a_usb_diag_runtime.last_open_ep_mps = ep_mps;
   hal_status = HAL_PCD_EP_Open(pdev->pData, ep_addr, ep_mps, ep_type);
+  g_a_usb_diag_runtime.last_open_ep_status = (uint32_t)hal_status;
 
   usb_status =  USBD_Get_USB_Status(hal_status);
+  if (usb_status != USBD_OK)
+  {
+    g_a_usb_diag_runtime.open_ep_fail_count++;
+  }
 
   return usb_status;
 }
@@ -667,10 +739,89 @@ USBD_StatusTypeDef USBD_LL_SetTestMode(USBD_HandleTypeDef *pdev, uint8_t testmod
   * @param  size: Size of allocated memory
   * @retval None
   */
+static uint32_t s_hid_class_mem[2][(sizeof(USBD_HID_HandleTypeDef) + 3U) / 4U];
+static uint32_t s_msc_class_mem[(sizeof(USBD_MSC_BOT_HandleTypeDef) + 3U) / 4U];
+static uint8_t s_hid_class_mem_used[2] = {0U, 0U};
+static uint8_t s_msc_class_mem_used = 0U;
+static uint32_t s_usbd_fallback_mem[256];
+static uint32_t s_usbd_fallback_offset = 0U;
+static uint32_t s_usbd_fallback_alloc_count = 0U;
+
 void *USBD_static_malloc(uint32_t size)
 {
-  static uint32_t mem[(sizeof(USBD_MSC_BOT_HandleTypeDef)/4)+1];/* On 32-bit boundary */
-  return mem;
+  uint32_t words = (size + 3U) / 4U;
+  uint32_t start = 0U;
+  uint32_t limit = 0U;
+  void *ptr = NULL;
+
+  g_a_usb_diag_runtime.malloc_call_count++;
+  g_a_usb_diag_runtime.malloc_last_size = size;
+  g_a_usb_diag_runtime.malloc_last_words = words;
+  g_a_usb_diag_runtime.malloc_last_start = 0U;
+  g_a_usb_diag_runtime.malloc_last_limit = 0U;
+
+  if (size == sizeof(USBD_HID_HandleTypeDef))
+  {
+    uint32_t idx;
+
+    limit = (uint32_t)(sizeof(s_hid_class_mem[0]) / sizeof(s_hid_class_mem[0][0]));
+    for (idx = 0U; idx < 2U; ++idx)
+    {
+      if (s_hid_class_mem_used[idx] == 0U)
+      {
+        s_hid_class_mem_used[idx] = 1U;
+        ptr = &s_hid_class_mem[idx][0];
+        start = idx * limit;
+        break;
+      }
+    }
+  }
+  else if (size == sizeof(USBD_MSC_BOT_HandleTypeDef))
+  {
+    limit = (uint32_t)(sizeof(s_msc_class_mem) / sizeof(s_msc_class_mem[0]));
+    if (s_msc_class_mem_used == 0U)
+    {
+      s_msc_class_mem_used = 1U;
+      ptr = &s_msc_class_mem[0];
+      start = 0U;
+    }
+  }
+  else
+  {
+    start = s_usbd_fallback_offset;
+    limit = (uint32_t)(sizeof(s_usbd_fallback_mem) / sizeof(s_usbd_fallback_mem[0]));
+    if ((start + words) <= limit)
+    {
+      s_usbd_fallback_offset += words;
+      s_usbd_fallback_alloc_count++;
+      ptr = &s_usbd_fallback_mem[start];
+    }
+  }
+
+  g_a_usb_diag_runtime.malloc_last_start = start;
+  g_a_usb_diag_runtime.malloc_last_limit = limit;
+
+  if (ptr == NULL)
+  {
+    g_a_usb_diag_runtime.malloc_fail_count++;
+    g_a_usb_diag_runtime.malloc_last_ptr = 0U;
+    g_a_usb_diag_runtime.malloc_last_offset = s_usbd_fallback_offset;
+    g_a_usb_diag_runtime.malloc_alloc_count =
+        (uint32_t)s_hid_class_mem_used[0] +
+        (uint32_t)s_hid_class_mem_used[1] +
+        (uint32_t)s_msc_class_mem_used +
+        s_usbd_fallback_alloc_count;
+    return NULL;
+  }
+
+  g_a_usb_diag_runtime.malloc_last_ptr = (uint32_t)(uintptr_t)ptr;
+  g_a_usb_diag_runtime.malloc_last_offset = s_usbd_fallback_offset;
+  g_a_usb_diag_runtime.malloc_alloc_count =
+      (uint32_t)s_hid_class_mem_used[0] +
+      (uint32_t)s_hid_class_mem_used[1] +
+      (uint32_t)s_msc_class_mem_used +
+      s_usbd_fallback_alloc_count;
+  return ptr;
 }
 
 /**
@@ -680,7 +831,56 @@ void *USBD_static_malloc(uint32_t size)
   */
 void USBD_static_free(void *p)
 {
+  uintptr_t addr = (uintptr_t)p;
+  uintptr_t hid0_base = (uintptr_t)&s_hid_class_mem[0][0];
+  uintptr_t hid0_end = (uintptr_t)(&s_hid_class_mem[0][0] + (sizeof(s_hid_class_mem[0]) / sizeof(s_hid_class_mem[0][0])));
+  uintptr_t hid1_base = (uintptr_t)&s_hid_class_mem[1][0];
+  uintptr_t hid1_end = (uintptr_t)(&s_hid_class_mem[1][0] + (sizeof(s_hid_class_mem[1]) / sizeof(s_hid_class_mem[1][0])));
+  uintptr_t msc_base = (uintptr_t)&s_msc_class_mem[0];
+  uintptr_t msc_end = (uintptr_t)(&s_msc_class_mem[0] + (sizeof(s_msc_class_mem) / sizeof(s_msc_class_mem[0])));
+  uintptr_t fallback_base = (uintptr_t)&s_usbd_fallback_mem[0];
+  uintptr_t fallback_end =
+      (uintptr_t)(&s_usbd_fallback_mem[0] + (sizeof(s_usbd_fallback_mem) / sizeof(s_usbd_fallback_mem[0])));
 
+  if (p == NULL)
+  {
+    return;
+  }
+
+  if ((addr >= hid0_base) && (addr < hid0_end))
+  {
+    s_hid_class_mem_used[0] = 0U;
+  }
+  else if ((addr >= hid1_base) && (addr < hid1_end))
+  {
+    s_hid_class_mem_used[1] = 0U;
+  }
+  else if ((addr >= msc_base) && (addr < msc_end))
+  {
+    s_msc_class_mem_used = 0U;
+  }
+  else if ((addr >= fallback_base) && (addr < fallback_end))
+  {
+    if (s_usbd_fallback_alloc_count != 0U)
+    {
+      s_usbd_fallback_alloc_count--;
+    }
+    if (s_usbd_fallback_alloc_count == 0U)
+    {
+      s_usbd_fallback_offset = 0U;
+    }
+  }
+  else
+  {
+    return;
+  }
+
+  g_a_usb_diag_runtime.malloc_last_offset = s_usbd_fallback_offset;
+  g_a_usb_diag_runtime.malloc_alloc_count =
+      (uint32_t)s_hid_class_mem_used[0] +
+      (uint32_t)s_hid_class_mem_used[1] +
+      (uint32_t)s_msc_class_mem_used +
+      s_usbd_fallback_alloc_count;
 }
 
 /**
