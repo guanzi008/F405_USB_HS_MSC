@@ -1,5 +1,6 @@
 #include "lcd_status.h"
 
+#include "lcd_zh.h"
 #include "ls013_lcd.h"
 #include "usbd_ctap_min.h"
 
@@ -7,8 +8,8 @@
 #include <string.h>
 
 #define LCD_TEXT_X 8u
-#define LCD_TEXT_Y0 36u
-#define LCD_TEXT_PITCH 9u
+#define LCD_TEXT_Y0 48u
+#define LCD_TEXT_PITCH 10u
 #define LCD_APP_COUNT 5u
 #define LCD_FIDO_RESERVED_BYTES (1024u * 1024u)
 #define TITLE_W 28u
@@ -183,6 +184,20 @@ static void lcd_draw_text_at(uint8_t x, uint8_t y, uint8_t clear_w, const char *
     }
 }
 
+static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height);
+
+static void lcd_draw_zh_at(uint8_t x, uint8_t y, uint8_t clear_w, lcd_zh_id_t id)
+{
+    const lcd_zh_bitmap_t *bmp = lcd_zh_get(id);
+
+    if (bmp == NULL) {
+        return;
+    }
+
+    ls013_lcd_rect(x, y, clear_w, (uint8_t)(bmp->height + 1u), 0u);
+    lcd_draw_bitmap_1bpp(x, y, bmp->data, bmp->width, bmp->height);
+}
+
 static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height)
 {
     uint8_t row;
@@ -200,59 +215,54 @@ static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, ui
     }
 }
 
-static void lcd_draw_shell(const uint8_t *title_bitmap, const char *ascii_title) {
-    char line[16];
-
+static void lcd_draw_shell(const uint8_t *title_bitmap, lcd_zh_id_t title_id) {
     ls013_lcd_clear(0xFFu);
     ls013_lcd_frame(0u, 0u, 128u, 128u, 1u);
     ls013_lcd_frame(4u, 4u, 120u, 120u, 1u);
     ls013_lcd_hline(8u, 31u, 112u, 1u);
     lcd_draw_bitmap_1bpp(TITLE_X, TITLE_Y, title_bitmap, TITLE_W, TITLE_H);
-    lcd_draw_text_line(0u, ascii_title);
-    if (s_menu_active != 0u) {
-        snprintf(line, sizeof(line), "MENU %u/%u", (unsigned)(s_menu_index + 1u), (unsigned)LCD_APP_COUNT);
-    } else {
-        snprintf(line, sizeof(line), "APP %u/%u", (unsigned)(s_active_app + 1u), (unsigned)LCD_APP_COUNT);
+    lcd_draw_zh_at(LCD_TEXT_X, 34u, 112u, title_id);
+}
+
+static void lcd_draw_menu_item(uint8_t row, uint8_t selected, lcd_zh_id_t id)
+{
+    uint8_t y = (uint8_t)(LCD_TEXT_Y0 + row * LCD_TEXT_PITCH);
+
+    ls013_lcd_rect(LCD_TEXT_X, (uint8_t)(y - 1u), 112u, 11u, 0u);
+    if (selected != 0u) {
+        lcd_draw_char(LCD_TEXT_X, y, '>');
     }
-    lcd_draw_text_line(11u, line);
+    lcd_draw_zh_at((uint8_t)(LCD_TEXT_X + 10u), y, 102u, id);
 }
 
 static void lcd_draw_menu_page(void) {
-    char line[24];
-
-    lcd_draw_shell(k_title_input, "MENU");
-    lcd_draw_text_line(1u, (s_menu_index == 0u) ? "> USB DEBUG" : "  USB DEBUG");
-    lcd_draw_text_line(2u, (s_menu_index == 1u) ? "> FIDO KEY" : "  FIDO KEY");
-    lcd_draw_text_line(3u, (s_menu_index == 2u) ? "> SPI FLASH" : "  SPI FLASH");
-    lcd_draw_text_line(4u, (s_menu_index == 3u) ? "> INPUTS" : "  INPUTS");
-    lcd_draw_text_line(5u, (s_menu_index == 4u) ? "> FIDO WIPE" : "  FIDO WIPE");
-    snprintf(line, sizeof(line), "POS:%ld", (long)s_last_encoder_position);
-    lcd_draw_text_line(6u, line);
-    snprintf(line, sizeof(line), "A:%u B:%u K:%u", s_last_enc_a, s_last_enc_b, s_last_enc_btn);
-    lcd_draw_text_line(7u, line);
-    snprintf(line, sizeof(line), "EV:%08lX", s_last_events);
-    lcd_draw_text_line(8u, line);
-    lcd_draw_text_line(9u, "SHORT ENTER");
-    lcd_draw_text_line(10u, "LONG BACK");
+    lcd_draw_shell(k_title_input, LCD_ZH_MENU);
+    lcd_draw_menu_item(0u, s_menu_index == 0u, LCD_ZH_MENU_USB_DEBUG);
+    lcd_draw_menu_item(1u, s_menu_index == 1u, LCD_ZH_MENU_SECURITY_KEY);
+    lcd_draw_menu_item(2u, s_menu_index == 2u, LCD_ZH_MENU_SPI_FLASH);
+    lcd_draw_menu_item(3u, s_menu_index == 3u, LCD_ZH_MENU_INPUT_DEV);
+    lcd_draw_menu_item(4u, s_menu_index == 4u, LCD_ZH_MENU_WIPE_KEY);
+    lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 6u * LCD_TEXT_PITCH), 112u, LCD_ZH_SHORT_ENTER);
+    lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 7u * LCD_TEXT_PITCH), 112u, LCD_ZH_LONG_BACK);
 }
 
 static void lcd_draw_usb_page(void) {
     char line[24];
 
-    lcd_draw_shell(k_title_debug, "DEBUG");
+    lcd_draw_shell(k_title_debug, LCD_ZH_DEBUG);
     snprintf(line, sizeof(line), "DS:%u CFG:%u", s_last_dev_state, s_last_dev_config);
-    lcd_draw_text_line(1u, line);
+    lcd_draw_text_line(0u, line);
     snprintf(line, sizeof(line), "RST:%lu SET:%lu", s_last_reset_count, s_last_setup_count);
-    lcd_draw_text_line(2u, line);
+    lcd_draw_text_line(1u, line);
     snprintf(line, sizeof(line), "OUT:%lu IN:%lu", s_last_data_out_count, s_last_data_in_count);
-    lcd_draw_text_line(3u, line);
+    lcd_draw_text_line(2u, line);
     snprintf(line, sizeof(line), "SUSP:%lu", s_last_suspend_count);
-    lcd_draw_text_line(4u, line);
+    lcd_draw_text_line(3u, line);
     snprintf(line, sizeof(line), "DAP RX:%lu", s_last_dap_rx_count);
-    lcd_draw_text_line(6u, line);
+    lcd_draw_text_line(5u, line);
     snprintf(line, sizeof(line), "DAP TX:%lu", s_last_dap_tx_count);
-    lcd_draw_text_line(7u, line);
-    lcd_draw_text_line(9u, "USB CMSIS-DAP");
+    lcd_draw_text_line(6u, line);
+    lcd_draw_text_line(7u, "USB CMSIS-DAP");
 }
 
 static void lcd_draw_security_page(void) {
@@ -260,7 +270,7 @@ static void lcd_draw_security_page(void) {
     const char *ui_text = "IDLE";
     const char *cmd_text = "--";
 
-    lcd_draw_shell(k_title_security, "FIDO");
+    lcd_draw_shell(k_title_security, LCD_ZH_KEY);
     switch (s_last_fido_ui_state) {
         case 1u: ui_text = "WAIT"; break;
         case 2u: ui_text = "OK"; break;
@@ -274,112 +284,112 @@ static void lcd_draw_security_page(void) {
         default: cmd_text = "--"; break;
     }
     snprintf(line, sizeof(line), "RX:%lu TX:%lu", s_last_fido_rx_count, s_last_fido_tx_count);
-    lcd_draw_text_line(1u, line);
+    lcd_draw_text_line(0u, line);
     snprintf(line, sizeof(line), "REQ:%08lX", s_last_fido_last_req_word0);
-    lcd_draw_text_line(2u, line);
+    lcd_draw_text_line(1u, line);
     snprintf(line, sizeof(line), "RSP:%08lX", s_last_fido_last_rsp_word0);
-    lcd_draw_text_line(3u, line);
+    lcd_draw_text_line(2u, line);
     snprintf(line, sizeof(line), "STAT:%02lX", s_last_fido_last_status & 0xFFu);
-    lcd_draw_text_line(4u, line);
+    lcd_draw_text_line(3u, line);
     snprintf(line, sizeof(line), "UI:%s CMD:%s", ui_text, cmd_text);
-    lcd_draw_text_line(6u, line);
+    lcd_draw_text_line(5u, line);
     if (s_last_fido_ui_state == 1u) {
-        lcd_draw_text_line(7u, "PRESS KNOB");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 6u * LCD_TEXT_PITCH), 112u, LCD_ZH_WAIT_CONFIRM);
     } else {
-        lcd_draw_text_line(7u, "MC/GA BUTTON");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 6u * LCD_TEXT_PITCH), 112u, LCD_ZH_BUTTON_CONFIRM);
     }
 }
 
 static void lcd_draw_flash_page(void) {
     char line[24];
 
-    lcd_draw_shell(k_title_storage, "FLASH");
+    lcd_draw_shell(k_title_storage, LCD_ZH_FLASH);
     if (s_last_flash_present != 0u) {
-        lcd_draw_text_line(1u, "PRESENT");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 0u * LCD_TEXT_PITCH), 112u, LCD_ZH_PRESENT);
         snprintf(line, sizeof(line), "ID:%06lX", s_last_flash_jedec_id & 0xFFFFFFu);
-        lcd_draw_text_line(2u, line);
+        lcd_draw_text_line(1u, line);
         snprintf(line, sizeof(line), "CAP:%luM", s_last_flash_capacity_bytes >> 20);
-        lcd_draw_text_line(3u, line);
+        lcd_draw_text_line(2u, line);
         snprintf(line, sizeof(line), "MODE:%u", s_last_flash_mode);
-        lcd_draw_text_line(4u, line);
+        lcd_draw_text_line(3u, line);
         snprintf(line, sizeof(line), "MSC:%luM", (s_last_flash_capacity_bytes - LCD_FIDO_RESERVED_BYTES) >> 20);
-        lcd_draw_text_line(6u, line);
-        lcd_draw_text_line(7u, "FIDO:RESV 1M");
+        lcd_draw_text_line(5u, line);
+        lcd_draw_text_line(6u, "FIDO:RESV 1M");
     } else {
-        lcd_draw_text_line(1u, "NOT FOUND");
-        lcd_draw_text_line(2u, "CHK SPI1");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 0u * LCD_TEXT_PITCH), 112u, LCD_ZH_NOT_FOUND);
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 1u * LCD_TEXT_PITCH), 112u, LCD_ZH_CHECK_SPI1);
     }
-    lcd_draw_text_line(9u, "PB3 PA6 PA7");
-    lcd_draw_text_line(10u, "CS PA4");
+    lcd_draw_text_line(6u, "PB3 PA6 PA7");
+    lcd_draw_text_line(7u, "CS PA4");
 }
 
 static void lcd_draw_input_page(void) {
     char line[24];
 
-    lcd_draw_shell(k_title_input, "INPUT");
+    lcd_draw_shell(k_title_input, LCD_ZH_INPUT);
     snprintf(line, sizeof(line), "A:%u B:%u K:%u", s_last_enc_a, s_last_enc_b, s_last_enc_btn);
-    lcd_draw_text_line(1u, line);
+    lcd_draw_text_line(0u, line);
     snprintf(line, sizeof(line), "POS:%ld", (long)s_last_encoder_position);
-    lcd_draw_text_line(2u, line);
+    lcd_draw_text_line(1u, line);
     snprintf(line, sizeof(line), "EV:%08lX", s_last_events);
-    lcd_draw_text_line(3u, line);
-    lcd_draw_text_line(5u, "ENC BUZ RGB");
-    lcd_draw_text_line(6u, "SHORT:CYAN");
-    lcd_draw_text_line(7u, "LONG:PURPLE");
+    lcd_draw_text_line(2u, line);
+    lcd_draw_text_line(4u, "ENC BUZ RGB");
+    lcd_draw_text_line(5u, "SHORT:CYAN");
+    lcd_draw_text_line(6u, "LONG:PURPLE");
 }
 
 static void lcd_draw_fido_wipe_page(void) {
     char line[24];
 
-    lcd_draw_shell(k_title_security, "WIPE");
-    lcd_draw_text_line(1u, "CLEAR FIDO STORE");
+    lcd_draw_shell(k_title_security, LCD_ZH_WIPE);
+    lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 0u * LCD_TEXT_PITCH), 112u, LCD_ZH_CLEAR_STORE);
     if (s_fido_wipe_active != 0u) {
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 2u * LCD_TEXT_PITCH), 112u, LCD_ZH_ERASING);
         snprintf(line, sizeof(line), "ERASE %u%%", (unsigned)s_fido_wipe_progress);
         lcd_draw_text_line(3u, line);
-        lcd_draw_text_line(4u, "PLEASE WAIT");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 4u * LCD_TEXT_PITCH), 112u, LCD_ZH_PLEASE_WAIT);
     } else {
-        lcd_draw_text_line(3u, "SHORT: ERASE");
-        lcd_draw_text_line(4u, "LONG : BACK");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 2u * LCD_TEXT_PITCH), 112u, LCD_ZH_SHORT_ERASE);
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 3u * LCD_TEXT_PITCH), 112u, LCD_ZH_LONG_BACK);
     }
     if (s_last_fido_store_result == 1u) {
-        lcd_draw_text_line(6u, "DONE");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 5u * LCD_TEXT_PITCH), 112u, LCD_ZH_DONE);
     } else if (s_last_fido_store_result == 2u) {
-        lcd_draw_text_line(6u, "ERASE FAIL");
+        lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 5u * LCD_TEXT_PITCH), 112u, LCD_ZH_ERASE_FAIL);
     } else {
-        lcd_draw_text_line(6u, "READY");
+        lcd_draw_text_line(5u, "READY");
     }
-    lcd_draw_text_line(8u, "RE-REGISTER KEY");
+    lcd_draw_zh_at(LCD_TEXT_X, (uint8_t)(LCD_TEXT_Y0 + 7u * LCD_TEXT_PITCH), 112u, LCD_ZH_REREGISTER);
 }
 
 static void lcd_draw_fido_popup(void)
 {
-    const char *cmd_text = "SECURITY";
+    lcd_zh_id_t cmd_text = LCD_ZH_GET_INFO;
     char line[24];
 
     if (s_last_fido_pending_cmd == CTAP_CMD_MAKE_CREDENTIAL) {
-        cmd_text = "MAKE CRED";
+        cmd_text = LCD_ZH_MAKE_CRED;
     } else if (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION) {
-        cmd_text = "GET ASSERT";
-    } else if (s_last_fido_pending_cmd == CTAP_CMD_GET_INFO) {
-        cmd_text = "GET INFO";
+        cmd_text = LCD_ZH_GET_ASSERT;
     }
 
-    ls013_lcd_rect(12u, 34u, 104u, 60u, 0u);
-    ls013_lcd_frame(12u, 34u, 104u, 60u, 1u);
-    ls013_lcd_frame(14u, 36u, 100u, 56u, 1u);
-    lcd_draw_text_at(24u, 43u, 80u, "FIDO CONFIRM");
-    lcd_draw_text_at(28u, 58u, 72u, cmd_text);
+    ls013_lcd_rect(12u, 24u, 104u, 80u, 0u);
+    ls013_lcd_frame(12u, 24u, 104u, 80u, 1u);
+    ls013_lcd_frame(14u, 26u, 100u, 76u, 1u);
+    lcd_draw_zh_at(20u, 39u, 88u, LCD_ZH_FIDO_CONFIRM);
+    lcd_draw_zh_at(28u, 52u, 72u, cmd_text);
     if ((s_last_fido_selection_count > 1u) && (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION)) {
-        snprintf(line, sizeof(line), "USER %u/%u",
+        lcd_draw_zh_at(22u, 65u, 24u, LCD_ZH_ACCOUNT);
+        snprintf(line, sizeof(line), "%u/%u",
                  (unsigned)(s_last_fido_selection_index + 1u),
                  (unsigned)s_last_fido_selection_count);
-        lcd_draw_text_at(22u, 70u, 84u, line);
-        lcd_draw_text_at(22u, 78u, 84u, s_last_fido_selection_name[0] != '\0' ? s_last_fido_selection_name : "ACCOUNT");
-        lcd_draw_text_at(22u, 86u, 84u, "KNOB SELECT");
-        lcd_draw_text_at(22u, 94u, 84u, "SHORT OK");
+        lcd_draw_text_at(48u, 66u, 24u, line);
+        lcd_draw_text_at(22u, 76u, 84u, s_last_fido_selection_name[0] != '\0' ? s_last_fido_selection_name : "USER");
+        lcd_draw_zh_at(22u, 84u, 84u, LCD_ZH_KNOB_SELECT);
+        lcd_draw_zh_at(22u, 94u, 84u, LCD_ZH_SHORT_OK);
     } else {
-        lcd_draw_text_at(22u, 74u, 84u, "SHORT  OK");
-        lcd_draw_text_at(22u, 84u, 84u, "LONG   BACK");
+        lcd_draw_zh_at(22u, 70u, 84u, LCD_ZH_SHORT_OK);
+        lcd_draw_zh_at(22u, 82u, 84u, LCD_ZH_LONG_CANCEL);
     }
 }
 

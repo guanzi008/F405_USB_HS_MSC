@@ -41,6 +41,7 @@ target_sources(stm32cubemx INTERFACE
     ../../Core/Src/aux_inputs.c
     ../../Core/Src/ext_flash_w25q.c
     ../../Core/Src/ls013_lcd.c
+    ../../Core/Src/lcd_zh.c
     ../../Core/Src/lcd_status.c
     ../../Core/Src/stm32f4xx_it.c
     ../../Core/Src/stm32f4xx_hal_msp.c
