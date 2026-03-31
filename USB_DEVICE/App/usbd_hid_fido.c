@@ -73,12 +73,26 @@ static void fido_diag_note_tx(const uint8_t *response, uint16_t response_len, ui
   }
 }
 
+static void fido_diag_note_state(const usbd_hid_fido_state_t *state)
+{
+  if (state == NULL)
+  {
+    return;
+  }
+
+  g_a_usb_diag_runtime.fido_rx_expected_total = state->rx_expected_len;
+  g_a_usb_diag_runtime.fido_rx_received_total = state->rx_received_len;
+  g_a_usb_diag_runtime.fido_rx_seq_next = state->rx_seq;
+  g_a_usb_diag_runtime.fido_rx_active = state->rx_active;
+}
+
 static void fido_reset_rx(usbd_hid_fido_state_t *state)
 {
   state->rx_active = 0U;
   state->rx_received_len = 0U;
   state->rx_expected_len = 0U;
   state->rx_seq = 0U;
+  fido_diag_note_state(state);
 }
 
 static void fido_start_tx(usbd_hid_fido_state_t *state, uint32_t cid, uint8_t cmd, uint16_t len)
@@ -311,6 +325,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
   }
 
   fido_diag_note_rx(request, request_len);
+  fido_diag_note_state(state);
 
   cid = fido_load_be32(request);
   tag = request[4];
@@ -327,6 +342,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
     state->rx_received_len = 0U;
     state->rx_seq = 0U;
     state->rx_active = 0U;
+    fido_diag_note_state(state);
 
     if (state->rx_expected_len > FIDO_HID_MSG_MAX)
     {
@@ -348,6 +364,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
         memcpy(state->rx_buf, &request[7], copy_len);
       }
       state->rx_received_len = copy_len;
+      fido_diag_note_state(state);
       if (state->rx_received_len >= state->rx_expected_len)
       {
         fido_process_message(state);
@@ -378,6 +395,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
     }
     state->rx_received_len = (uint16_t)(state->rx_received_len + copy_len);
     state->rx_seq = (uint8_t)(state->rx_seq + 1U);
+    fido_diag_note_state(state);
     if (state->rx_received_len >= state->rx_expected_len)
     {
       state->rx_active = 0U;
@@ -385,6 +403,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
       state->rx_received_len = 0U;
       state->rx_expected_len = 0U;
       state->rx_seq = 0U;
+      fido_diag_note_state(state);
     }
   }
 

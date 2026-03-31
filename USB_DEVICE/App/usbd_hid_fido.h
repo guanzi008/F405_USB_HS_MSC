@@ -7,7 +7,7 @@
 #include "fido_crypto.h"
 
 #define FIDO_HID_PACKET_SIZE        64U
-#define FIDO_HID_MSG_MAX            1024U
+#define FIDO_HID_MSG_MAX            8192U
 #define FIDO_HID_REPORT_DESC_SIZE   34U
 #define FIDO_HID_BROADCAST_CID      0xFFFFFFFFU
 

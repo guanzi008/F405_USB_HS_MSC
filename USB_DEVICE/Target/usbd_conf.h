@@ -238,6 +238,10 @@ typedef struct
   uint32_t fido_last_allow_count;
   uint32_t fido_last_match_count;
   uint32_t fido_last_auto_confirm;
+  uint32_t fido_rx_expected_total;
+  uint32_t fido_rx_received_total;
+  uint32_t fido_rx_seq_next;
+  uint32_t fido_rx_active;
   uint32_t set_cfg_call_count;
   uint32_t last_set_cfg_class;
   uint32_t last_set_cfg_cfgidx;

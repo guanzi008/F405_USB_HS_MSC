@@ -939,7 +939,152 @@ static uint8_t parse_get_assertion(const uint8_t *req,
   return 1U;
 }
 
-static uint8_t ctap_collect_assertion_candidates(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
+static uint8_t ctap_append_candidate(const fido_store_credential_t *credential, uint32_t slot_index)
+{
+  uint8_t i;
+
+  if (credential == NULL)
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < s_ctap_selection_count; ++i)
+  {
+    if (s_ctap_candidate_slots[i] == slot_index)
+    {
+      return 1U;
+    }
+  }
+
+  if (s_ctap_selection_count >= CTAP_GA_ALLOW_LIST_MAX)
+  {
+    return 0U;
+  }
+
+  s_ctap_candidates[s_ctap_selection_count] = *credential;
+  s_ctap_candidate_slots[s_ctap_selection_count] = slot_index;
+  s_ctap_selection_count = (uint8_t)(s_ctap_selection_count + 1U);
+  return 1U;
+}
+
+static uint8_t ctap_collect_assertion_candidates_from_allow_list(const uint8_t *req,
+                                                                 uint16_t req_len,
+                                                                 const uint8_t rp_id_hash[FIDO_SHA256_SIZE])
+{
+  cbor_reader_t reader;
+  uint32_t pair_count;
+  uint32_t i;
+
+  if ((req == NULL) || (req_len < 2U) || (rp_id_hash == NULL))
+  {
+    return 0U;
+  }
+
+  s_ctap_selection_count = 0U;
+  s_ctap_selection_index = 0U;
+
+  reader.buf = &req[1];
+  reader.len = (uint16_t)(req_len - 1U);
+  reader.off = 0U;
+
+  if (cbor_enter_map(&reader, &pair_count) == 0U)
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < pair_count; ++i)
+  {
+    uint32_t key;
+
+    if (cbor_read_uint(&reader, &key) == 0U)
+    {
+      return 0U;
+    }
+
+    if (key == CTAP_GA_KEY_ALLOW_LIST)
+    {
+      uint32_t item_count;
+      uint32_t item_index;
+
+      if (cbor_enter_array(&reader, &item_count) == 0U)
+      {
+        return 0U;
+      }
+
+      g_a_usb_diag_runtime.fido_last_allow_count = (uint32_t)((item_count > 0xFFFFU) ? 0xFFFFU : item_count);
+      for (item_index = 0U; item_index < item_count; ++item_index)
+      {
+        uint32_t field_count;
+        uint32_t field_index;
+        uint8_t found = 0U;
+        uint8_t credential_id[FIDO_CREDENTIAL_ID_SIZE];
+        uint16_t credential_id_len = 0U;
+
+        if (cbor_enter_map(&reader, &field_count) == 0U)
+        {
+          return 0U;
+        }
+
+        for (field_index = 0U; field_index < field_count; ++field_index)
+        {
+          cbor_span_t key_text;
+
+          if (cbor_read_text(&reader, &key_text) == 0U)
+          {
+            return 0U;
+          }
+          if (cbor_text_eq(&key_text, "id") != 0U)
+          {
+            cbor_span_t value;
+
+            if (cbor_read_bytes(&reader, &value) == 0U)
+            {
+              return 0U;
+            }
+            if (value.len <= FIDO_CREDENTIAL_ID_SIZE)
+            {
+              memcpy(credential_id, value.ptr, value.len);
+              credential_id_len = value.len;
+              found = 1U;
+            }
+          }
+          else if (cbor_skip_item(&reader) == 0U)
+          {
+            return 0U;
+          }
+        }
+
+        if (found != 0U)
+        {
+          fido_store_credential_t credential;
+          uint32_t slot_index = 0U;
+
+          if (fido_store_find(rp_id_hash,
+                              credential_id,
+                              credential_id_len,
+                              &credential,
+                              &slot_index) != 0U)
+          {
+            (void)ctap_append_candidate(&credential, slot_index);
+          }
+        }
+      }
+
+      return s_ctap_selection_count;
+    }
+
+    if (cbor_skip_item(&reader) == 0U)
+    {
+      return 0U;
+    }
+  }
+
+  return 0U;
+}
+
+static uint8_t ctap_collect_assertion_candidates(const uint8_t *req,
+                                                 uint16_t req_len,
+                                                 const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                                                  const ctap_get_assertion_req_t *parsed)
 {
   uint32_t slot_index;
@@ -947,32 +1092,14 @@ static uint8_t ctap_collect_assertion_candidates(const uint8_t rp_id_hash[FIDO_S
   s_ctap_selection_count = 0U;
   s_ctap_selection_index = 0U;
 
-  if ((rp_id_hash == NULL) || (parsed == NULL))
+  if ((req == NULL) || (rp_id_hash == NULL) || (parsed == NULL))
   {
     return 0U;
   }
 
-  if (parsed->allow_credential_count != 0U)
+  if (parsed->allow_credential_total != 0U)
   {
-    uint8_t allow_index;
-
-    for (allow_index = 0U; allow_index < parsed->allow_credential_count; ++allow_index)
-    {
-      if (fido_store_find(rp_id_hash,
-                          parsed->allow_credential_ids[allow_index],
-                          parsed->allow_credential_id_lens[allow_index],
-                          &s_ctap_candidates[s_ctap_selection_count],
-                          &s_ctap_candidate_slots[s_ctap_selection_count]) != 0U)
-      {
-        s_ctap_selection_count = (uint8_t)(s_ctap_selection_count + 1U);
-        if (s_ctap_selection_count >= CTAP_GA_ALLOW_LIST_MAX)
-        {
-          break;
-        }
-      }
-    }
-
-    return s_ctap_selection_count;
+    return ctap_collect_assertion_candidates_from_allow_list(req, req_len, rp_id_hash);
   }
 
   for (slot_index = 0U; slot_index < FIDO_STORE_CREDENTIALS_MAX; ++slot_index)
@@ -1326,7 +1453,7 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
   }
 
   fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
-  match_count = ctap_collect_assertion_candidates(rp_id_hash, &parsed);
+  match_count = ctap_collect_assertion_candidates(req, req_len, rp_id_hash, &parsed);
   g_a_usb_diag_runtime.fido_last_allow_count = parsed.allow_credential_total;
   g_a_usb_diag_runtime.fido_last_match_count = match_count;
   if (match_count == 0U)

@@ -285,7 +285,7 @@ int main(void)
              g_a_usb_diag_runtime.itf_last_bmRequest & 0xFFu,
              g_a_usb_diag_runtime.itf_last_bRequest & 0xFFu,
              g_a_usb_diag_runtime.itf_last_status);
-      printf("AFID RX=%lu TX=%lu RL=%lu TL=%lu RW0=%08lX RW1=%08lX TW0=%08lX TW1=%08lX ST=%lu\r\n",
+      printf("AFID RX=%lu TX=%lu RL=%lu TL=%lu RW0=%08lX RW1=%08lX TW0=%08lX TW1=%08lX ST=%lu RE=%lu RR=%lu SQ=%lu RA=%lu\r\n",
              g_a_usb_diag_runtime.fido_rx_count,
              g_a_usb_diag_runtime.fido_tx_count,
              g_a_usb_diag_runtime.fido_last_req_len,
@@ -294,7 +294,11 @@ int main(void)
              g_a_usb_diag_runtime.fido_last_req_word1,
              g_a_usb_diag_runtime.fido_last_rsp_word0,
              g_a_usb_diag_runtime.fido_last_rsp_word1,
-             g_a_usb_diag_runtime.fido_last_status);
+             g_a_usb_diag_runtime.fido_last_status,
+             g_a_usb_diag_runtime.fido_rx_expected_total,
+             g_a_usb_diag_runtime.fido_rx_received_total,
+             g_a_usb_diag_runtime.fido_rx_seq_next,
+             g_a_usb_diag_runtime.fido_rx_active);
       printf("ACTP CMD=%02lX CST=%02lX AL=%lu MT=%lu AC=%lu UI=%u SEL=%u/%u\r\n",
              g_a_usb_diag_runtime.fido_last_ctap_cmd & 0xFFu,
              g_a_usb_diag_runtime.fido_last_ctap_status & 0xFFu,
