@@ -185,6 +185,7 @@ static void lcd_draw_text_at(uint8_t x, uint8_t y, uint8_t clear_w, const char *
 }
 
 static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height);
+static void lcd_draw_bitmap_1bpp_repaired(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height);
 
 static void lcd_draw_zh_at(uint8_t x, uint8_t y, uint8_t clear_w, lcd_zh_id_t id)
 {
@@ -195,7 +196,7 @@ static void lcd_draw_zh_at(uint8_t x, uint8_t y, uint8_t clear_w, lcd_zh_id_t id
     }
 
     ls013_lcd_rect(x, y, clear_w, (uint8_t)(bmp->height + 1u), 0u);
-    lcd_draw_bitmap_1bpp(x, y, bmp->data, bmp->width, bmp->height);
+    lcd_draw_bitmap_1bpp_repaired(x, y, bmp->data, bmp->width, bmp->height);
 }
 
 static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height)
@@ -209,6 +210,61 @@ static void lcd_draw_bitmap_1bpp(uint8_t x, uint8_t y, const uint8_t *bitmap, ui
             uint8_t byte = bitmap[(uint16_t)row * row_bytes + (uint16_t)(col >> 3)];
             uint8_t bit = (uint8_t)(0x80u >> (col & 7u));
             if ((byte & bit) != 0u) {
+                ls013_lcd_set_pixel((uint8_t)(x + col), (uint8_t)(y + row), 1u);
+            }
+        }
+    }
+}
+
+static uint8_t lcd_bitmap_get_pixel(const uint8_t *bitmap, uint8_t width, uint8_t height, int16_t col, int16_t row)
+{
+    uint8_t row_bytes;
+    uint8_t byte;
+    uint8_t bit;
+
+    if (bitmap == NULL) {
+        return 0u;
+    }
+    if (col < 0 || row < 0 || col >= (int16_t)width || row >= (int16_t)height) {
+        return 0u;
+    }
+
+    row_bytes = (uint8_t)((width + 7u) / 8u);
+    byte = bitmap[(uint16_t)row * row_bytes + (uint16_t)(col >> 3)];
+    bit = (uint8_t)(0x80u >> (col & 7));
+    return ((byte & bit) != 0u) ? 1u : 0u;
+}
+
+static void lcd_draw_bitmap_1bpp_repaired(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height)
+{
+    uint8_t row;
+    uint8_t col;
+
+    for (row = 0u; row < height; ++row) {
+        for (col = 0u; col < width; ++col) {
+            uint8_t on = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col, (int16_t)row);
+
+            if (on == 0u) {
+                uint8_t left = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col - 1, (int16_t)row);
+                uint8_t right = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col + 1, (int16_t)row);
+                uint8_t up = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col, (int16_t)row - 1);
+                uint8_t down = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col, (int16_t)row + 1);
+                uint8_t ul = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col - 1, (int16_t)row - 1);
+                uint8_t ur = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col + 1, (int16_t)row - 1);
+                uint8_t dl = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col - 1, (int16_t)row + 1);
+                uint8_t dr = lcd_bitmap_get_pixel(bitmap, width, height, (int16_t)col + 1, (int16_t)row + 1);
+                uint8_t orth = (uint8_t)(left + right + up + down);
+
+                if ((left != 0u && right != 0u) ||
+                    (up != 0u && down != 0u) ||
+                    (ul != 0u && dr != 0u) ||
+                    (ur != 0u && dl != 0u) ||
+                    (orth >= 3u)) {
+                    on = 1u;
+                }
+            }
+
+            if (on != 0u) {
                 ls013_lcd_set_pixel((uint8_t)(x + col), (uint8_t)(y + row), 1u);
             }
         }
