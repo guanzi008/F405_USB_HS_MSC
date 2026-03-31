@@ -11,6 +11,7 @@
 #define CTAP_MC_KEY_RP               0x02U
 #define CTAP_MC_KEY_USER             0x03U
 #define CTAP_MC_KEY_PUBKEY_PARAMS    0x04U
+#define CTAP_MC_KEY_EXCLUDE_LIST     0x05U
 
 #define CTAP_GA_KEY_RP_ID            0x01U
 #define CTAP_GA_KEY_CLIENT_DATA_HASH 0x02U
@@ -47,6 +48,10 @@ typedef struct
   uint8_t has_rp_id;
   uint8_t has_user;
   uint8_t es256_ok;
+  uint8_t exclude_credential_ids[CTAP_GA_ALLOW_LIST_MAX][FIDO_CREDENTIAL_ID_SIZE];
+  uint16_t exclude_credential_id_lens[CTAP_GA_ALLOW_LIST_MAX];
+  uint8_t exclude_credential_count;
+  uint16_t exclude_credential_total;
 } ctap_make_credential_req_t;
 
 typedef struct
@@ -863,6 +868,17 @@ static uint8_t parse_make_credential(const uint8_t *req,
         }
         break;
 
+      case CTAP_MC_KEY_EXCLUDE_LIST:
+        if (parse_allow_list(&reader,
+                             parsed->exclude_credential_ids,
+                             parsed->exclude_credential_id_lens,
+                             &parsed->exclude_credential_count,
+                             &parsed->exclude_credential_total) == 0U)
+        {
+          return 0U;
+        }
+        break;
+
       default:
         if (cbor_skip_item(&reader) == 0U)
         {
@@ -873,6 +889,34 @@ static uint8_t parse_make_credential(const uint8_t *req,
   }
 
   return 1U;
+}
+
+static uint8_t ctap_make_credential_matches_exclude(const ctap_make_credential_req_t *parsed,
+                                                    const uint8_t rp_id_hash[FIDO_SHA256_SIZE])
+{
+  uint8_t i;
+
+  if ((parsed == NULL) || (rp_id_hash == NULL))
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < parsed->exclude_credential_count; ++i)
+  {
+    fido_store_credential_t credential;
+    uint32_t slot_index = 0U;
+
+    if (fido_store_find(rp_id_hash,
+                        parsed->exclude_credential_ids[i],
+                        parsed->exclude_credential_id_lens[i],
+                        &credential,
+                        &slot_index) != 0U)
+    {
+      return 1U;
+    }
+  }
+
+  return 0U;
 }
 
 static uint8_t parse_get_assertion(const uint8_t *req,
@@ -1453,6 +1497,15 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
   if (parsed.es256_ok == 0U)
   {
     return usbd_ctap_min_error(CTAP_ERR_UNSUPPORTED_ALGORITHM, resp, resp_cap, resp_len);
+  }
+  {
+    uint8_t rp_id_hash[FIDO_SHA256_SIZE];
+
+    fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
+    if (ctap_make_credential_matches_exclude(&parsed, rp_id_hash) != 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_CREDENTIAL_EXCLUDED, resp, resp_cap, resp_len);
+    }
   }
 
   s_ctap_selection_count = 0U;

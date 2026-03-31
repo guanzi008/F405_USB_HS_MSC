@@ -98,6 +98,8 @@ static char s_delete_selection_name[32];
 static void fido_delete_refresh_state(void)
 {
   fido_store_credential_t credential;
+  char label[32];
+  const char *name;
 
   memset(s_delete_selection_name, 0, sizeof(s_delete_selection_name));
   s_delete_slot_index = 0xFFFFFFFFu;
@@ -117,8 +119,7 @@ static void fido_delete_refresh_state(void)
 
   if (fido_store_get_nth(s_delete_selection_index, &credential, &s_delete_slot_index) != 0u)
   {
-    const char *name = credential.user_display_name;
-
+    name = credential.user_display_name;
     if ((name == NULL) || (name[0] == '\0'))
     {
       name = credential.user_name;
@@ -127,7 +128,8 @@ static void fido_delete_refresh_state(void)
     {
       name = "USER";
     }
-    strncpy(s_delete_selection_name, name, sizeof(s_delete_selection_name) - 1u);
+    snprintf(label, sizeof(label), "#%lu %.20s", (unsigned long)credential.counter, name);
+    strncpy(s_delete_selection_name, label, sizeof(s_delete_selection_name) - 1u);
   }
 
   lcd_status_set_fido_delete_state(s_delete_selection_count,
@@ -227,16 +229,38 @@ int main(void)
         lcd_status_set_fido_store_result(0u);
         if ((s_delete_selection_count != 0u) && (s_delete_slot_index != 0xFFFFFFFFu))
         {
+          fido_store_credential_t verify_credential;
+          uint16_t count_before;
+          uint16_t count_after;
+          uint8_t slot_still_valid;
           uint8_t delete_ok;
 
+          count_before = s_delete_selection_count;
           lcd_status_set_fido_delete_progress(1u, 0u);
           HAL_Delay(120u);
           delete_ok = (uint8_t)(fido_store_delete_with_progress(s_delete_slot_index,
                                                                 fido_delete_progress_cb,
                                                                 NULL) != 0u ? 1u : 0u);
           HAL_Delay(120u);
+          count_after = fido_store_count();
+          slot_still_valid = fido_store_get_by_index(s_delete_slot_index, &verify_credential);
           lcd_status_set_fido_delete_progress(0u, 100u);
-          lcd_status_set_fido_store_result((uint8_t)(delete_ok != 0u ? 1u : 2u));
+          printf("ADEL SLOT=%lu BEFORE=%u AFTER=%u OK=%u VALID=%u\r\n",
+                 (unsigned long)s_delete_slot_index,
+                 (unsigned)count_before,
+                 (unsigned)count_after,
+                 (unsigned)delete_ok,
+                 (unsigned)slot_still_valid);
+          if ((delete_ok != 0u) &&
+              (count_after + 1u == count_before) &&
+              (slot_still_valid == 0u))
+          {
+            lcd_status_set_fido_store_result(1u);
+          }
+          else
+          {
+            lcd_status_set_fido_store_result(2u);
+          }
           fido_delete_refresh_state();
           HAL_Delay(180u);
         }
