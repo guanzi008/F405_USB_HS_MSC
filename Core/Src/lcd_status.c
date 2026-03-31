@@ -34,6 +34,9 @@ static uint32_t s_last_fido_last_rsp_word0;
 static uint32_t s_last_fido_last_status;
 static uint8_t s_last_fido_ui_state;
 static uint8_t s_last_fido_pending_cmd;
+static uint8_t s_last_fido_selection_count;
+static uint8_t s_last_fido_selection_index;
+static char s_last_fido_selection_name[32];
 static uint8_t s_last_flash_present;
 static uint32_t s_last_flash_jedec_id;
 static uint32_t s_last_flash_capacity_bytes;
@@ -48,6 +51,8 @@ static uint8_t s_menu_index;
 static uint8_t s_active_app;
 static uint8_t s_page_dirty;
 static uint8_t s_last_fido_store_result;
+static uint8_t s_fido_wipe_active;
+static uint8_t s_fido_wipe_progress;
 
 static const uint8_t k_title_debug[TITLE_H * TITLE_ROW_BYTES] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -324,10 +329,18 @@ static void lcd_draw_input_page(void) {
 }
 
 static void lcd_draw_fido_wipe_page(void) {
+    char line[24];
+
     lcd_draw_shell(k_title_security, "WIPE");
     lcd_draw_text_line(1u, "CLEAR FIDO STORE");
-    lcd_draw_text_line(3u, "SHORT: ERASE");
-    lcd_draw_text_line(4u, "LONG : BACK");
+    if (s_fido_wipe_active != 0u) {
+        snprintf(line, sizeof(line), "ERASE %u%%", (unsigned)s_fido_wipe_progress);
+        lcd_draw_text_line(3u, line);
+        lcd_draw_text_line(4u, "PLEASE WAIT");
+    } else {
+        lcd_draw_text_line(3u, "SHORT: ERASE");
+        lcd_draw_text_line(4u, "LONG : BACK");
+    }
     if (s_last_fido_store_result == 1u) {
         lcd_draw_text_line(6u, "DONE");
     } else if (s_last_fido_store_result == 2u) {
@@ -341,6 +354,7 @@ static void lcd_draw_fido_wipe_page(void) {
 static void lcd_draw_fido_popup(void)
 {
     const char *cmd_text = "SECURITY";
+    char line[24];
 
     if (s_last_fido_pending_cmd == CTAP_CMD_MAKE_CREDENTIAL) {
         cmd_text = "MAKE CRED";
@@ -355,8 +369,18 @@ static void lcd_draw_fido_popup(void)
     ls013_lcd_frame(14u, 36u, 100u, 56u, 1u);
     lcd_draw_text_at(24u, 43u, 80u, "FIDO CONFIRM");
     lcd_draw_text_at(28u, 58u, 72u, cmd_text);
-    lcd_draw_text_at(22u, 74u, 84u, "SHORT  OK");
-    lcd_draw_text_at(22u, 84u, 84u, "LONG   BACK");
+    if ((s_last_fido_selection_count > 1u) && (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION)) {
+        snprintf(line, sizeof(line), "USER %u/%u",
+                 (unsigned)(s_last_fido_selection_index + 1u),
+                 (unsigned)s_last_fido_selection_count);
+        lcd_draw_text_at(22u, 70u, 84u, line);
+        lcd_draw_text_at(22u, 78u, 84u, s_last_fido_selection_name[0] != '\0' ? s_last_fido_selection_name : "ACCOUNT");
+        lcd_draw_text_at(22u, 86u, 84u, "KNOB SELECT");
+        lcd_draw_text_at(22u, 94u, 84u, "SHORT OK");
+    } else {
+        lcd_draw_text_at(22u, 74u, 84u, "SHORT  OK");
+        lcd_draw_text_at(22u, 84u, 84u, "LONG   BACK");
+    }
 }
 
 static void lcd_redraw_page(void) {
@@ -414,6 +438,9 @@ void lcd_status_init(void) {
     s_last_fido_last_status = 0xFFFFFFFFu;
     s_last_fido_ui_state = 0xFFu;
     s_last_fido_pending_cmd = 0xFFu;
+    s_last_fido_selection_count = 0xFFu;
+    s_last_fido_selection_index = 0xFFu;
+    memset(s_last_fido_selection_name, 0, sizeof(s_last_fido_selection_name));
     s_last_flash_present = 0xFFu;
     s_last_flash_jedec_id = 0xFFFFFFFFu;
     s_last_flash_capacity_bytes = 0xFFFFFFFFu;
@@ -428,6 +455,8 @@ void lcd_status_init(void) {
     s_active_app = 0u;
     s_page_dirty = 1u;
     s_last_fido_store_result = 0u;
+    s_fido_wipe_active = 0u;
+    s_fido_wipe_progress = 0u;
 
     ls013_lcd_init();
     lcd_redraw_page();
@@ -476,6 +505,17 @@ void lcd_status_set_fido_store_result(uint8_t result) {
     }
 }
 
+void lcd_status_set_fido_store_progress(uint8_t active, uint8_t progress) {
+    if ((s_fido_wipe_active != active) || (s_fido_wipe_progress != progress)) {
+        s_fido_wipe_active = active;
+        s_fido_wipe_progress = progress;
+        s_page_dirty = 1u;
+        if (s_lcd_ready != 0u) {
+            lcd_redraw_page();
+        }
+    }
+}
+
 void lcd_status_tick(uint32_t now_ms) {
     if (s_lcd_ready == 0u) {
         return;
@@ -499,6 +539,9 @@ void lcd_status_update(uint8_t dev_state,
                        uint32_t fido_last_status,
                        uint8_t fido_ui_state,
                        uint8_t fido_pending_cmd,
+                       uint8_t fido_selection_count,
+                       uint8_t fido_selection_index,
+                       const char *fido_selection_name,
                        uint8_t flash_present,
                        uint32_t flash_jedec_id,
                        uint32_t flash_capacity_bytes,
@@ -528,6 +571,9 @@ void lcd_status_update(uint8_t dev_state,
         fido_last_status == s_last_fido_last_status &&
         fido_ui_state == s_last_fido_ui_state &&
         fido_pending_cmd == s_last_fido_pending_cmd &&
+        fido_selection_count == s_last_fido_selection_count &&
+        fido_selection_index == s_last_fido_selection_index &&
+        strcmp((fido_selection_name != NULL) ? fido_selection_name : "", s_last_fido_selection_name) == 0 &&
         flash_present == s_last_flash_present &&
         flash_jedec_id == s_last_flash_jedec_id &&
         flash_capacity_bytes == s_last_flash_capacity_bytes &&
@@ -557,6 +603,12 @@ void lcd_status_update(uint8_t dev_state,
     s_last_fido_last_status = fido_last_status;
     s_last_fido_ui_state = fido_ui_state;
     s_last_fido_pending_cmd = fido_pending_cmd;
+    s_last_fido_selection_count = fido_selection_count;
+    s_last_fido_selection_index = fido_selection_index;
+    memset(s_last_fido_selection_name, 0, sizeof(s_last_fido_selection_name));
+    if (fido_selection_name != NULL) {
+        strncpy(s_last_fido_selection_name, fido_selection_name, sizeof(s_last_fido_selection_name) - 1u);
+    }
     s_last_flash_present = flash_present;
     s_last_flash_jedec_id = flash_jedec_id;
     s_last_flash_capacity_bytes = flash_capacity_bytes;

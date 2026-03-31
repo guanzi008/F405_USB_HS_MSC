@@ -65,6 +65,17 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void fido_wipe_progress_cb(uint16_t current, uint16_t total, void *ctx)
+{
+  uint8_t progress = 0u;
+
+  (void)ctx;
+  if (total != 0u)
+  {
+    progress = (uint8_t)((current * 100u) / total);
+  }
+  lcd_status_set_fido_store_progress((uint8_t)(current < total), progress);
+}
 
 /* USER CODE END 0 */
 
@@ -147,7 +158,10 @@ int main(void)
       }
       else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == 4u))
       {
-        lcd_status_set_fido_store_result((uint8_t)(fido_store_clear() != 0u ? 1u : 2u));
+        lcd_status_set_fido_store_result(0u);
+        lcd_status_set_fido_store_progress(1u, 0u);
+        lcd_status_set_fido_store_result((uint8_t)(fido_store_clear_with_progress(fido_wipe_progress_cb, NULL) != 0u ? 1u : 2u));
+        lcd_status_set_fido_store_progress(0u, 100u);
       }
       else
       {
@@ -167,7 +181,25 @@ int main(void)
       }
     }
     aux_inputs_get_status(&aux_status);
-    if (lcd_status_is_menu_active() != 0u)
+    if ((fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
+        (fido_ui.pending_cmd == CTAP_CMD_GET_ASSERTION) &&
+        (fido_ui.selection_count > 1u))
+    {
+      int32_t select_position = aux_status.encoder_position / 2;
+
+      while (select_position > last_menu_encoder_position)
+      {
+        usbd_ctap_min_next_selection();
+        last_menu_encoder_position += 1;
+      }
+      while (select_position < last_menu_encoder_position)
+      {
+        usbd_ctap_min_prev_selection();
+        last_menu_encoder_position -= 1;
+      }
+      usbd_ctap_min_get_ui_status(&fido_ui);
+    }
+    else if (lcd_status_is_menu_active() != 0u)
     {
       int32_t menu_position = aux_status.encoder_position / 2;
 
@@ -206,6 +238,9 @@ int main(void)
                       g_a_usb_diag_runtime.fido_last_status,
                       fido_ui.ui_state,
                       fido_ui.pending_cmd,
+                      fido_ui.selection_count,
+                      fido_ui.selection_index,
+                      fido_ui.selection_name,
                       flash_info.present,
                       flash_info.jedec_id,
                       flash_info.capacity_bytes,

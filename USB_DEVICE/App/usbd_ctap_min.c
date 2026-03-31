@@ -35,8 +35,13 @@ typedef struct
 {
   uint8_t client_data_hash[FIDO_SHA256_SIZE];
   char rp_id[96];
+  uint8_t user_id[64];
+  uint16_t user_id_len;
+  char user_name[64];
+  char user_display_name[64];
   uint8_t has_client_data_hash;
   uint8_t has_rp_id;
+  uint8_t has_user;
   uint8_t es256_ok;
 } ctap_make_credential_req_t;
 
@@ -54,6 +59,10 @@ typedef struct
 static uint8_t s_ctap_user_presence_latched;
 static uint8_t s_ctap_pending_cmd;
 static uint8_t s_ctap_ui_state;
+static uint8_t s_ctap_selection_count;
+static uint8_t s_ctap_selection_index;
+static fido_store_credential_t s_ctap_candidates[CTAP_GA_ALLOW_LIST_MAX];
+static uint32_t s_ctap_candidate_slots[CTAP_GA_ALLOW_LIST_MAX];
 
 static void store_be16(uint8_t *dst, uint16_t value)
 {
@@ -489,6 +498,85 @@ static uint8_t parse_rp_map(cbor_reader_t *reader, char *rp_id, uint16_t rp_id_c
   return found;
 }
 
+static uint8_t parse_user_map(cbor_reader_t *reader, ctap_make_credential_req_t *parsed)
+{
+  uint32_t pair_count;
+  uint32_t i;
+  uint8_t found_id = 0U;
+
+  if ((parsed == NULL) || (cbor_enter_map(reader, &pair_count) == 0U))
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < pair_count; ++i)
+  {
+    cbor_span_t key;
+
+    if (cbor_read_text(reader, &key) == 0U)
+    {
+      return 0U;
+    }
+
+    if (cbor_text_eq(&key, "id") != 0U)
+    {
+      cbor_span_t value;
+
+      if (cbor_read_bytes(reader, &value) == 0U)
+      {
+        return 0U;
+      }
+      if (value.len > sizeof(parsed->user_id))
+      {
+        return 0U;
+      }
+      memcpy(parsed->user_id, value.ptr, value.len);
+      parsed->user_id_len = value.len;
+      found_id = 1U;
+    }
+    else if (cbor_text_eq(&key, "name") != 0U)
+    {
+      cbor_span_t value;
+      uint16_t copy_len;
+
+      if (cbor_read_text(reader, &value) == 0U)
+      {
+        return 0U;
+      }
+      copy_len = value.len;
+      if (copy_len >= sizeof(parsed->user_name))
+      {
+        copy_len = (uint16_t)(sizeof(parsed->user_name) - 1U);
+      }
+      memcpy(parsed->user_name, value.ptr, copy_len);
+      parsed->user_name[copy_len] = '\0';
+    }
+    else if (cbor_text_eq(&key, "displayName") != 0U)
+    {
+      cbor_span_t value;
+      uint16_t copy_len;
+
+      if (cbor_read_text(reader, &value) == 0U)
+      {
+        return 0U;
+      }
+      copy_len = value.len;
+      if (copy_len >= sizeof(parsed->user_display_name))
+      {
+        copy_len = (uint16_t)(sizeof(parsed->user_display_name) - 1U);
+      }
+      memcpy(parsed->user_display_name, value.ptr, copy_len);
+      parsed->user_display_name[copy_len] = '\0';
+    }
+    else if (cbor_skip_item(reader) == 0U)
+    {
+      return 0U;
+    }
+  }
+
+  return found_id;
+}
+
 static uint8_t parse_pubkey_params(cbor_reader_t *reader)
 {
   uint32_t item_count;
@@ -678,6 +766,14 @@ static uint8_t parse_make_credential(const uint8_t *req,
         }
         break;
 
+      case CTAP_MC_KEY_USER:
+        parsed->has_user = parse_user_map(&reader, parsed);
+        if (parsed->has_user == 0U)
+        {
+          return 0U;
+        }
+        break;
+
       case CTAP_MC_KEY_PUBKEY_PARAMS:
         parsed->es256_ok = parse_pubkey_params(&reader);
         if (parsed->es256_ok == 0U)
@@ -785,6 +881,67 @@ static uint8_t parse_get_assertion(const uint8_t *req,
   }
 
   return 1U;
+}
+
+static uint8_t ctap_collect_assertion_candidates(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
+                                                 const ctap_get_assertion_req_t *parsed)
+{
+  uint32_t slot_index;
+
+  s_ctap_selection_count = 0U;
+  s_ctap_selection_index = 0U;
+
+  if ((rp_id_hash == NULL) || (parsed == NULL))
+  {
+    return 0U;
+  }
+
+  if (parsed->allow_credential_count != 0U)
+  {
+    uint8_t allow_index;
+
+    for (allow_index = 0U; allow_index < parsed->allow_credential_count; ++allow_index)
+    {
+      if (fido_store_find(rp_id_hash,
+                          parsed->allow_credential_ids[allow_index],
+                          parsed->allow_credential_id_lens[allow_index],
+                          &s_ctap_candidates[s_ctap_selection_count],
+                          &s_ctap_candidate_slots[s_ctap_selection_count]) != 0U)
+      {
+        s_ctap_selection_count = (uint8_t)(s_ctap_selection_count + 1U);
+        if (s_ctap_selection_count >= CTAP_GA_ALLOW_LIST_MAX)
+        {
+          break;
+        }
+      }
+    }
+
+    return s_ctap_selection_count;
+  }
+
+  for (slot_index = 0U; slot_index < FIDO_STORE_CREDENTIALS_MAX; ++slot_index)
+  {
+    fido_store_credential_t credential;
+
+    if (fido_store_get_by_index(slot_index, &credential) == 0U)
+    {
+      continue;
+    }
+    if (memcmp(credential.rp_id_hash, rp_id_hash, FIDO_SHA256_SIZE) != 0)
+    {
+      continue;
+    }
+
+    s_ctap_candidates[s_ctap_selection_count] = credential;
+    s_ctap_candidate_slots[s_ctap_selection_count] = slot_index;
+    s_ctap_selection_count = (uint8_t)(s_ctap_selection_count + 1U);
+    if (s_ctap_selection_count >= CTAP_GA_ALLOW_LIST_MAX)
+    {
+      break;
+    }
+  }
+
+  return s_ctap_selection_count;
 }
 
 static uint8_t build_cose_public_key(const uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE],
@@ -908,6 +1065,7 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   uint8_t signature[80];
   uint16_t signature_len = 0U;
   uint16_t off = 0U;
+  uint8_t include_user = 0U;
 
   if ((rp_id_hash == NULL) || (credential == NULL) || (client_data_hash == NULL) ||
       (resp == NULL) || (resp_len == NULL))
@@ -919,6 +1077,9 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   auth_data[32] = CTAP_FLAG_USER_PRESENT;
   credential->sign_count += 1U;
   store_be32(&auth_data[33], credential->sign_count);
+  include_user = (uint8_t)((credential->user_id_len != 0U) ||
+                           (credential->user_name[0] != '\0') ||
+                           (credential->user_display_name[0] != '\0'));
 
   if ((fido_crypto_sign_es256_der(credential->private_key,
                                   auth_data,
@@ -933,7 +1094,7 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   }
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map(3U, resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map((uint32_t)(include_user != 0U ? 4U : 3U), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("type", resp, resp_cap, &off) == 0U) ||
@@ -950,6 +1111,48 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
   {
     return 0U;
+  }
+
+  if (include_user != 0U)
+  {
+    uint32_t user_map_items = 0U;
+
+    if (credential->user_id_len != 0U)
+    {
+      user_map_items += 1U;
+    }
+    if (credential->user_name[0] != '\0')
+    {
+      user_map_items += 1U;
+    }
+    if (credential->user_display_name[0] != '\0')
+    {
+      user_map_items += 1U;
+    }
+
+    if ((cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
+        (cbor_write_map(user_map_items, resp, resp_cap, &off) == 0U))
+    {
+      return 0U;
+    }
+    if ((credential->user_id_len != 0U) &&
+        ((cbor_write_text("id", resp, resp_cap, &off) == 0U) ||
+         (cbor_write_bytes(credential->user_id, credential->user_id_len, resp, resp_cap, &off) == 0U)))
+    {
+      return 0U;
+    }
+    if ((credential->user_name[0] != '\0') &&
+        ((cbor_write_text("name", resp, resp_cap, &off) == 0U) ||
+         (cbor_write_text(credential->user_name, resp, resp_cap, &off) == 0U)))
+    {
+      return 0U;
+    }
+    if ((credential->user_display_name[0] != '\0') &&
+        ((cbor_write_text("displayName", resp, resp_cap, &off) == 0U) ||
+         (cbor_write_text(credential->user_display_name, resp, resp_cap, &off) == 0U)))
+    {
+      return 0U;
+    }
   }
 
   *resp_len = off;
@@ -1027,6 +1230,8 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
     return usbd_ctap_min_error(CTAP_ERR_UNSUPPORTED_ALGORITHM, resp, resp_cap, resp_len);
   }
 
+  s_ctap_selection_count = 0U;
+  s_ctap_selection_index = 0U;
   s_ctap_pending_cmd = CTAP_CMD_MAKE_CREDENTIAL;
   s_ctap_ui_state = USBD_CTAP_UI_WAIT_TOUCH;
   *resp_len = 0U;
@@ -1040,6 +1245,7 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
                                                   uint16_t *resp_len)
 {
   ctap_get_assertion_req_t parsed;
+  uint8_t rp_id_hash[FIDO_SHA256_SIZE];
 
   if (parse_get_assertion(req, req_len, &parsed) == 0U)
   {
@@ -1048,6 +1254,14 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
   if ((parsed.has_client_data_hash == 0U) || (parsed.has_rp_id == 0U))
   {
     return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
+  }
+
+  fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
+  if (ctap_collect_assertion_candidates(rp_id_hash, &parsed) == 0U)
+  {
+    s_ctap_ui_state = USBD_CTAP_UI_IDLE;
+    s_ctap_pending_cmd = 0U;
+    return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
   }
 
   s_ctap_pending_cmd = CTAP_CMD_GET_ASSERTION;
@@ -1072,6 +1286,8 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
     case CTAP_CMD_GET_INFO:
       s_ctap_ui_state = USBD_CTAP_UI_IDLE;
       s_ctap_pending_cmd = 0U;
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
       return usbd_ctap_min_build_get_info(resp, resp_cap, resp_len);
 
     case CTAP_CMD_MAKE_CREDENTIAL:
@@ -1083,6 +1299,8 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
     default:
       s_ctap_ui_state = USBD_CTAP_UI_IDLE;
       s_ctap_pending_cmd = 0U;
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
       return usbd_ctap_min_error(CTAP_ERR_INVALID_COMMAND, resp, resp_cap, resp_len);
   }
 }
@@ -1107,6 +1325,8 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
   if (confirmed == 0U)
   {
     s_ctap_ui_state = USBD_CTAP_UI_DENIED;
+    s_ctap_selection_count = 0U;
+    s_ctap_selection_index = 0U;
     resp[0] = CTAP_ERR_OPERATION_DENIED;
     *resp_len = 1U;
     return USBD_CTAP_MIN_DONE;
@@ -1130,7 +1350,13 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
 
     fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
-    if ((fido_store_register(rp_id_hash, parsed.client_data_hash, &credential) == 0U) ||
+    if ((fido_store_register(rp_id_hash,
+                             parsed.client_data_hash,
+                             parsed.user_id,
+                             parsed.user_id_len,
+                             parsed.user_name,
+                             parsed.user_display_name,
+                             &credential) == 0U) ||
         (build_make_credential_response(rp_id_hash, &credential, resp, resp_cap, resp_len) == 0U))
     {
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
@@ -1144,8 +1370,6 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     fido_store_credential_t credential;
     uint8_t rp_id_hash[FIDO_SHA256_SIZE];
     uint32_t slot_index = 0U;
-    uint8_t matched = 0U;
-    uint8_t allow_index;
 
     if ((parse_get_assertion(req, req_len, &parsed) == 0U) ||
         (parsed.has_client_data_hash == 0U) ||
@@ -1155,29 +1379,40 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
 
     fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
-    if (parsed.allow_credential_count == 0U)
+    if ((s_ctap_selection_count != 0U) && (s_ctap_selection_index < s_ctap_selection_count))
     {
-      matched = fido_store_find(rp_id_hash, NULL, 0U, &credential, &slot_index);
+      credential = s_ctap_candidates[s_ctap_selection_index];
+      slot_index = s_ctap_candidate_slots[s_ctap_selection_index];
     }
     else
     {
-      for (allow_index = 0U; allow_index < parsed.allow_credential_count; ++allow_index)
+      uint8_t matched = 0U;
+      uint8_t allow_index;
+
+      if (parsed.allow_credential_count == 0U)
       {
-        if (fido_store_find(rp_id_hash,
-                            parsed.allow_credential_ids[allow_index],
-                            parsed.allow_credential_id_lens[allow_index],
-                            &credential,
-                            &slot_index) != 0U)
+        matched = fido_store_find(rp_id_hash, NULL, 0U, &credential, &slot_index);
+      }
+      else
+      {
+        for (allow_index = 0U; allow_index < parsed.allow_credential_count; ++allow_index)
         {
-          matched = 1U;
-          break;
+          if (fido_store_find(rp_id_hash,
+                              parsed.allow_credential_ids[allow_index],
+                              parsed.allow_credential_id_lens[allow_index],
+                              &credential,
+                              &slot_index) != 0U)
+          {
+            matched = 1U;
+            break;
+          }
         }
       }
-    }
 
-    if (matched == 0U)
-    {
-      return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+      if (matched == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+      }
     }
 
     if (build_get_assertion_response(rp_id_hash,
@@ -1190,6 +1425,8 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     {
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
     }
+    s_ctap_selection_count = 0U;
+    s_ctap_selection_index = 0U;
     return USBD_CTAP_MIN_DONE;
   }
 
@@ -1206,6 +1443,22 @@ void usbd_ctap_min_note_user_denied(void)
   s_ctap_user_presence_latched = 2U;
 }
 
+void usbd_ctap_min_next_selection(void)
+{
+  if ((s_ctap_pending_cmd == CTAP_CMD_GET_ASSERTION) && (s_ctap_selection_count > 1U))
+  {
+    s_ctap_selection_index = (uint8_t)((s_ctap_selection_index + 1U) % s_ctap_selection_count);
+  }
+}
+
+void usbd_ctap_min_prev_selection(void)
+{
+  if ((s_ctap_pending_cmd == CTAP_CMD_GET_ASSERTION) && (s_ctap_selection_count > 1U))
+  {
+    s_ctap_selection_index = (uint8_t)((s_ctap_selection_index + s_ctap_selection_count - 1U) % s_ctap_selection_count);
+  }
+}
+
 void usbd_ctap_min_get_ui_status(usbd_ctap_min_ui_status_t *status)
 {
   if (status == NULL)
@@ -1215,6 +1468,29 @@ void usbd_ctap_min_get_ui_status(usbd_ctap_min_ui_status_t *status)
 
   status->ui_state = s_ctap_ui_state;
   status->pending_cmd = s_ctap_pending_cmd;
+  status->selection_count = s_ctap_selection_count;
+  status->selection_index = s_ctap_selection_index;
+  memset(status->selection_name, 0, sizeof(status->selection_name));
+  if ((s_ctap_selection_count != 0U) && (s_ctap_selection_index < s_ctap_selection_count))
+  {
+    const char *src = s_ctap_candidates[s_ctap_selection_index].user_display_name;
+    size_t n;
+
+    if (src[0] == '\0')
+    {
+      src = s_ctap_candidates[s_ctap_selection_index].user_name;
+    }
+    n = strlen(src);
+    if (n >= sizeof(status->selection_name))
+    {
+      n = sizeof(status->selection_name) - 1U;
+    }
+    if (n != 0U)
+    {
+      memcpy(status->selection_name, src, n);
+      status->selection_name[n] = '\0';
+    }
+  }
 
   if ((s_ctap_ui_state == USBD_CTAP_UI_WAIT_TOUCH) && (s_ctap_user_presence_latched == 1U))
   {

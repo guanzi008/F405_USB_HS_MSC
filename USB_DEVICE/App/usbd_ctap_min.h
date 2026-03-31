@@ -33,6 +33,9 @@ typedef struct
 {
   uint8_t ui_state;
   uint8_t pending_cmd;
+  uint8_t selection_count;
+  uint8_t selection_index;
+  char selection_name[32];
 } usbd_ctap_min_ui_status_t;
 
 uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
@@ -48,6 +51,8 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                        uint16_t *resp_len);
 void usbd_ctap_min_note_user_presence(void);
 void usbd_ctap_min_note_user_denied(void);
+void usbd_ctap_min_next_selection(void);
+void usbd_ctap_min_prev_selection(void);
 void usbd_ctap_min_get_ui_status(usbd_ctap_min_ui_status_t *status);
 
 #endif
