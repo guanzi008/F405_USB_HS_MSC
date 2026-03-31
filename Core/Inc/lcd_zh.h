@@ -43,6 +43,11 @@ typedef enum {
     LCD_ZH_DONE = 30,
     LCD_ZH_ERASE_FAIL = 31,
     LCD_ZH_REREGISTER = 32,
+    LCD_ZH_MENU_USB_DEBUG_S = 33,
+    LCD_ZH_MENU_SECURITY_KEY_S = 34,
+    LCD_ZH_MENU_SPI_FLASH_S = 35,
+    LCD_ZH_MENU_INPUT_DEV_S = 36,
+    LCD_ZH_MENU_WIPE_KEY_S = 37,
     LCD_ZH_COUNT
 } lcd_zh_id_t;
 
