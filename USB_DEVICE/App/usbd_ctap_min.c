@@ -1308,7 +1308,6 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   uint8_t signature[80];
   uint16_t signature_len = 0U;
   uint16_t off = 0U;
-  uint8_t include_user = 0U;
   uint32_t next_sign_count;
 
   if ((rp_id_hash == NULL) || (credential == NULL) || (client_data_hash == NULL) ||
@@ -1321,9 +1320,6 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   auth_data[32] = (uint8_t)((user_present != 0U) ? CTAP_FLAG_USER_PRESENT : 0U);
   next_sign_count = credential->sign_count + ((user_present != 0U) ? 1U : 0U);
   store_be32(&auth_data[33], next_sign_count);
-  include_user = (uint8_t)((credential->user_id_len != 0U) ||
-                           (credential->user_name[0] != '\0') ||
-                           (credential->user_display_name[0] != '\0'));
 
   if ((fido_crypto_sign_es256_der(credential->private_key,
                                   auth_data,
@@ -1337,65 +1333,24 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   }
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map((uint32_t)(include_user != 0U ? 4U : 3U), resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(3U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("type", resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("public-key", resp, resp_cap, &off) == 0U) ||
+      /* CTAP canonical CBOR requires shorter text keys first: "id" before "type". */
       (cbor_write_text("id", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(credential->credential_id,
                         credential->credential_id_len,
                         resp,
                         resp_cap,
                         &off) == 0U) ||
+      (cbor_write_text("type", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("public-key", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(auth_data, sizeof(auth_data), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
   {
     return 0U;
-  }
-
-  if (include_user != 0U)
-  {
-    uint32_t user_map_items = 0U;
-
-    if (credential->user_id_len != 0U)
-    {
-      user_map_items += 1U;
-    }
-    if (credential->user_name[0] != '\0')
-    {
-      user_map_items += 1U;
-    }
-    if (credential->user_display_name[0] != '\0')
-    {
-      user_map_items += 1U;
-    }
-
-    if ((cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
-        (cbor_write_map(user_map_items, resp, resp_cap, &off) == 0U))
-    {
-      return 0U;
-    }
-    if ((credential->user_id_len != 0U) &&
-        ((cbor_write_text("id", resp, resp_cap, &off) == 0U) ||
-         (cbor_write_bytes(credential->user_id, credential->user_id_len, resp, resp_cap, &off) == 0U)))
-    {
-      return 0U;
-    }
-    if ((credential->user_name[0] != '\0') &&
-        ((cbor_write_text("name", resp, resp_cap, &off) == 0U) ||
-         (cbor_write_text(credential->user_name, resp, resp_cap, &off) == 0U)))
-    {
-      return 0U;
-    }
-    if ((credential->user_display_name[0] != '\0') &&
-        ((cbor_write_text("displayName", resp, resp_cap, &off) == 0U) ||
-         (cbor_write_text(credential->user_display_name, resp, resp_cap, &off) == 0U)))
-    {
-      return 0U;
-    }
   }
 
   if (user_present != 0U)
