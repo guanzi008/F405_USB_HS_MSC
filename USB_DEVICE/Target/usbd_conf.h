@@ -233,6 +233,11 @@ typedef struct
   uint32_t fido_last_rsp_word0;
   uint32_t fido_last_rsp_word1;
   uint32_t fido_last_status;
+  uint32_t fido_last_ctap_cmd;
+  uint32_t fido_last_ctap_status;
+  uint32_t fido_last_allow_count;
+  uint32_t fido_last_match_count;
+  uint32_t fido_last_auto_confirm;
   uint32_t set_cfg_call_count;
   uint32_t last_set_cfg_class;
   uint32_t last_set_cfg_cfgidx;

@@ -5,6 +5,7 @@
 #include "stm32f4xx_hal.h"
 #include "fido_crypto.h"
 #include "fido_store.h"
+#include "usbd_conf.h"
 
 #define CTAP_MC_KEY_CLIENT_DATA_HASH 0x01U
 #define CTAP_MC_KEY_RP               0x02U
@@ -14,8 +15,8 @@
 #define CTAP_GA_KEY_RP_ID            0x01U
 #define CTAP_GA_KEY_CLIENT_DATA_HASH 0x02U
 #define CTAP_GA_KEY_ALLOW_LIST       0x03U
-#define CTAP_GA_ALLOW_LIST_MAX       8U
-#define CTAP_RECENT_APPROVAL_WINDOW_MS 4000U
+#define CTAP_GA_ALLOW_LIST_MAX       64U
+#define CTAP_RECENT_APPROVAL_WINDOW_MS 15000U
 
 #define CTAP_FLAG_USER_PRESENT 0x01U
 #define CTAP_FLAG_ATTESTED     0x40U
@@ -54,6 +55,7 @@ typedef struct
   uint8_t allow_credential_ids[CTAP_GA_ALLOW_LIST_MAX][FIDO_CREDENTIAL_ID_SIZE];
   uint16_t allow_credential_id_lens[CTAP_GA_ALLOW_LIST_MAX];
   uint8_t allow_credential_count;
+  uint16_t allow_credential_total;
   uint8_t has_client_data_hash;
   uint8_t has_rp_id;
 } ctap_get_assertion_req_t;
@@ -68,6 +70,23 @@ static uint32_t s_ctap_candidate_slots[CTAP_GA_ALLOW_LIST_MAX];
 static uint8_t s_ctap_recent_cmd;
 static uint32_t s_ctap_recent_approved_at_ms;
 static uint8_t s_ctap_recent_req_hash[FIDO_SHA256_SIZE];
+
+static void ctap_diag_note_request(uint8_t cmd,
+                                   uint32_t allow_count,
+                                   uint32_t match_count,
+                                   uint32_t auto_confirm)
+{
+  g_a_usb_diag_runtime.fido_last_ctap_cmd = cmd;
+  g_a_usb_diag_runtime.fido_last_ctap_status = 0xFFFFFFFFu;
+  g_a_usb_diag_runtime.fido_last_allow_count = allow_count;
+  g_a_usb_diag_runtime.fido_last_match_count = match_count;
+  g_a_usb_diag_runtime.fido_last_auto_confirm = auto_confirm;
+}
+
+static void ctap_diag_note_status(uint8_t status)
+{
+  g_a_usb_diag_runtime.fido_last_ctap_status = status;
+}
 
 static uint8_t ctap_request_matches_recent(uint8_t cmd, const uint8_t *req, uint16_t req_len)
 {
@@ -680,18 +699,21 @@ static uint8_t parse_pubkey_params(cbor_reader_t *reader)
 static uint8_t parse_allow_list(cbor_reader_t *reader,
                                 uint8_t cred_ids[CTAP_GA_ALLOW_LIST_MAX][FIDO_CREDENTIAL_ID_SIZE],
                                 uint16_t *cred_id_lens,
-                                uint8_t *cred_id_count)
+                                uint8_t *cred_id_count,
+                                uint16_t *cred_id_total)
 {
   uint32_t item_count;
   uint32_t i;
 
   if ((cred_ids == NULL) || (cred_id_lens == NULL) || (cred_id_count == NULL) ||
+      (cred_id_total == NULL) ||
       (cbor_enter_array(reader, &item_count) == 0U))
   {
     return 0U;
   }
 
   *cred_id_count = 0U;
+  *cred_id_total = (uint16_t)((item_count > 0xFFFFU) ? 0xFFFFU : item_count);
   for (i = 0U; i < item_count; ++i)
   {
     uint32_t pair_count;
@@ -898,7 +920,8 @@ static uint8_t parse_get_assertion(const uint8_t *req,
         if (parse_allow_list(&reader,
                              parsed->allow_credential_ids,
                              parsed->allow_credential_id_lens,
-                             &parsed->allow_credential_count) == 0U)
+                             &parsed->allow_credential_count,
+                             &parsed->allow_credential_total) == 0U)
         {
           return 0U;
         }
@@ -1229,6 +1252,7 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
   }
 
   *resp_len = off;
+  ctap_diag_note_status(CTAP_STATUS_OK);
   return 1U;
 }
 
@@ -1240,6 +1264,7 @@ static uint8_t usbd_ctap_min_error(uint8_t code, uint8_t *resp, uint16_t resp_ca
   }
   resp[0] = code;
   *resp_len = 1U;
+  ctap_diag_note_status(code);
   return 1U;
 }
 
@@ -1250,6 +1275,9 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
                                                     uint16_t *resp_len)
 {
   ctap_make_credential_req_t parsed;
+  uint8_t auto_confirm;
+
+  ctap_diag_note_request(CTAP_CMD_MAKE_CREDENTIAL, 0U, 0U, 0U);
 
   if (parse_make_credential(req, req_len, &parsed) == 0U)
   {
@@ -1268,7 +1296,9 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
   s_ctap_selection_index = 0U;
   s_ctap_pending_cmd = CTAP_CMD_MAKE_CREDENTIAL;
   s_ctap_ui_state = USBD_CTAP_UI_WAIT_TOUCH;
-  s_ctap_user_presence_latched = (uint8_t)(ctap_request_matches_recent(CTAP_CMD_MAKE_CREDENTIAL, req, req_len) != 0U ? 1U : 0U);
+  auto_confirm = (uint8_t)(ctap_request_matches_recent(CTAP_CMD_MAKE_CREDENTIAL, req, req_len) != 0U ? 1U : 0U);
+  s_ctap_user_presence_latched = auto_confirm;
+  g_a_usb_diag_runtime.fido_last_auto_confirm = auto_confirm;
   *resp_len = 0U;
   return USBD_CTAP_MIN_PENDING;
 }
@@ -1281,6 +1311,10 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
 {
   ctap_get_assertion_req_t parsed;
   uint8_t rp_id_hash[FIDO_SHA256_SIZE];
+  uint8_t match_count;
+  uint8_t auto_confirm;
+
+  ctap_diag_note_request(CTAP_CMD_GET_ASSERTION, 0U, 0U, 0U);
 
   if (parse_get_assertion(req, req_len, &parsed) == 0U)
   {
@@ -1292,7 +1326,10 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
   }
 
   fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
-  if (ctap_collect_assertion_candidates(rp_id_hash, &parsed) == 0U)
+  match_count = ctap_collect_assertion_candidates(rp_id_hash, &parsed);
+  g_a_usb_diag_runtime.fido_last_allow_count = parsed.allow_credential_total;
+  g_a_usb_diag_runtime.fido_last_match_count = match_count;
+  if (match_count == 0U)
   {
     s_ctap_ui_state = USBD_CTAP_UI_IDLE;
     s_ctap_pending_cmd = 0U;
@@ -1301,7 +1338,9 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
 
   s_ctap_pending_cmd = CTAP_CMD_GET_ASSERTION;
   s_ctap_ui_state = USBD_CTAP_UI_WAIT_TOUCH;
-  s_ctap_user_presence_latched = (uint8_t)(ctap_request_matches_recent(CTAP_CMD_GET_ASSERTION, req, req_len) != 0U ? 1U : 0U);
+  auto_confirm = (uint8_t)(ctap_request_matches_recent(CTAP_CMD_GET_ASSERTION, req, req_len) != 0U ? 1U : 0U);
+  s_ctap_user_presence_latched = auto_confirm;
+  g_a_usb_diag_runtime.fido_last_auto_confirm = auto_confirm;
   *resp_len = 0U;
   return USBD_CTAP_MIN_PENDING;
 }
@@ -1320,6 +1359,7 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
   switch (req[0])
   {
     case CTAP_CMD_GET_INFO:
+      ctap_diag_note_request(CTAP_CMD_GET_INFO, 0U, 0U, 0U);
       s_ctap_ui_state = USBD_CTAP_UI_IDLE;
       s_ctap_pending_cmd = 0U;
       s_ctap_selection_count = 0U;
@@ -1398,6 +1438,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
     }
     ctap_remember_recent_approval(cmd, req, req_len);
+    ctap_diag_note_status(CTAP_STATUS_OK);
     return USBD_CTAP_MIN_DONE;
   }
 
@@ -1465,6 +1506,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     s_ctap_selection_count = 0U;
     s_ctap_selection_index = 0U;
     ctap_remember_recent_approval(cmd, req, req_len);
+    ctap_diag_note_status(CTAP_STATUS_OK);
     return USBD_CTAP_MIN_DONE;
   }
 

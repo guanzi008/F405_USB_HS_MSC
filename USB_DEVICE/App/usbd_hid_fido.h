@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "usbd_core.h"
+#include "fido_crypto.h"
 
 #define FIDO_HID_PACKET_SIZE        64U
 #define FIDO_HID_MSG_MAX            1024U
@@ -45,8 +46,10 @@ typedef struct
   uint8_t rx_active;
   uint8_t tx_active;
   uint8_t wait_user_presence;
+  uint8_t pending_req_valid;
   uint16_t pending_cbor_len;
   uint32_t last_keepalive_ms;
+  uint8_t pending_req_hash[FIDO_SHA256_SIZE];
   uint8_t rx_buf[FIDO_HID_MSG_MAX];
   uint8_t tx_buf[FIDO_HID_MSG_MAX];
 } usbd_hid_fido_state_t;

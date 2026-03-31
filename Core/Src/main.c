@@ -138,6 +138,7 @@ int main(void)
     uint8_t uart_rx = 0u;
 
     input_events = aux_inputs_poll(now);
+    usbd_ctap_min_get_ui_status(&fido_ui);
     if (HAL_UART_Receive(&huart4, &uart_rx, 1u, 0u) == HAL_OK)
     {
       if ((uart_rx == 'y') || (uart_rx == 'Y'))
@@ -294,6 +295,15 @@ int main(void)
              g_a_usb_diag_runtime.fido_last_rsp_word0,
              g_a_usb_diag_runtime.fido_last_rsp_word1,
              g_a_usb_diag_runtime.fido_last_status);
+      printf("ACTP CMD=%02lX CST=%02lX AL=%lu MT=%lu AC=%lu UI=%u SEL=%u/%u\r\n",
+             g_a_usb_diag_runtime.fido_last_ctap_cmd & 0xFFu,
+             g_a_usb_diag_runtime.fido_last_ctap_status & 0xFFu,
+             g_a_usb_diag_runtime.fido_last_allow_count,
+             g_a_usb_diag_runtime.fido_last_match_count,
+             g_a_usb_diag_runtime.fido_last_auto_confirm,
+             fido_ui.ui_state,
+             fido_ui.selection_index,
+             fido_ui.selection_count);
     }
 
     lcd_status_tick(now);

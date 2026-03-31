@@ -4,6 +4,7 @@
 
 #include "usbd_conf.h"
 #include "usbd_ctap_min.h"
+#include "fido_crypto.h"
 
 __ALIGN_BEGIN static uint8_t k_fido_hid_report_desc[FIDO_HID_REPORT_DESC_SIZE] __ALIGN_END = {
     0x06U, 0xD0U, 0xF1U,
@@ -94,6 +95,24 @@ static void fido_queue_error(usbd_hid_fido_state_t *state, uint32_t cid, uint8_t
 {
   state->tx_buf[0] = code;
   fido_start_tx(state, cid, FIDO_HID_CMD_ERROR, 1U);
+}
+
+static uint8_t fido_is_same_pending_cbor(const usbd_hid_fido_state_t *state)
+{
+  uint8_t req_hash[FIDO_SHA256_SIZE];
+
+  if ((state == NULL) ||
+      (state->wait_user_presence == 0U) ||
+      (state->pending_req_valid == 0U) ||
+      (state->rx_cmd != FIDO_HID_CMD_CBOR) ||
+      (state->pending_cbor_len == 0U) ||
+      (state->pending_cbor_len != state->rx_expected_len))
+  {
+    return 0U;
+  }
+
+  fido_crypto_sha256(state->rx_buf, state->rx_expected_len, req_hash);
+  return (uint8_t)(memcmp(req_hash, state->pending_req_hash, sizeof(req_hash)) == 0);
 }
 
 static uint16_t fido_emit_tx_packet(usbd_hid_fido_state_t *state,
@@ -205,30 +224,47 @@ static void fido_process_message(usbd_hid_fido_state_t *state)
 
   if (state->rx_cmd == FIDO_HID_CMD_CBOR)
   {
-    uint8_t result = usbd_ctap_min_handle_cbor(state->rx_buf,
-                                               state->rx_expected_len,
-                                               state->tx_buf,
-                                               (uint16_t)sizeof(state->tx_buf),
-                                               &resp_len);
-
-    if (result == 0U)
+    if ((state->wait_user_presence != 0U) && (fido_is_same_pending_cbor(state) != 0U))
     {
-      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
-      return;
-    }
-
-    if (result == USBD_CTAP_MIN_PENDING)
-    {
-      state->wait_user_presence = 1U;
-      state->pending_cbor_len = state->rx_expected_len;
       state->last_keepalive_ms = HAL_GetTick();
       state->tx_buf[0] = FIDO_HID_KEEPALIVE_UPNEEDED;
       fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
       return;
     }
+    else if (state->wait_user_presence != 0U)
+    {
+      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_BUSY);
+      return;
+    }
 
-    fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
-    return;
+    {
+      uint8_t result = usbd_ctap_min_handle_cbor(state->rx_buf,
+                                                 state->rx_expected_len,
+                                                 state->tx_buf,
+                                                 (uint16_t)sizeof(state->tx_buf),
+                                                 &resp_len);
+
+      if (result == 0U)
+      {
+        fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+        return;
+      }
+
+      if (result == USBD_CTAP_MIN_PENDING)
+      {
+        state->wait_user_presence = 1U;
+        state->pending_cbor_len = state->rx_expected_len;
+        fido_crypto_sha256(state->rx_buf, state->rx_expected_len, state->pending_req_hash);
+        state->pending_req_valid = 1U;
+        state->last_keepalive_ms = HAL_GetTick();
+        state->tx_buf[0] = FIDO_HID_KEEPALIVE_UPNEEDED;
+        fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
+        return;
+      }
+
+      fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
+      return;
+    }
   }
 
   fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_INVALID_CMD);
@@ -392,6 +428,7 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
       fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
     }
     state->wait_user_presence = 0U;
+    state->pending_req_valid = 0U;
     state->pending_cbor_len = 0U;
   }
   else if (ui.ui_state == USBD_CTAP_UI_DENIED)
@@ -410,6 +447,7 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
       fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
     }
     state->wait_user_presence = 0U;
+    state->pending_req_valid = 0U;
     state->pending_cbor_len = 0U;
   }
   else if ((uint32_t)(now_ms - state->last_keepalive_ms) >= 250U)
