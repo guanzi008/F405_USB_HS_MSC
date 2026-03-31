@@ -102,12 +102,12 @@ static uint32_t fido_allocate_cid(usbd_hid_fido_state_t *state)
 
   if ((cid == 0U) || (cid == FIDO_HID_BROADCAST_CID))
   {
-    cid = 1U;
+    cid = 0x01000000U;
   }
   state->next_cid = cid + 1U;
   if ((state->next_cid == 0U) || (state->next_cid == FIDO_HID_BROADCAST_CID))
   {
-    state->next_cid = 1U;
+    state->next_cid = 0x01000000U;
   }
   return cid;
 }
@@ -195,7 +195,7 @@ void usbd_hid_fido_init(usbd_hid_fido_state_t *state)
   }
 
   memset(state, 0, sizeof(*state));
-  state->next_cid = 1U;
+  state->next_cid = 0x01000000U;
 }
 
 uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
