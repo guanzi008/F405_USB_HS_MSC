@@ -25,6 +25,7 @@
 #include "usbd_core.h"
 
 #include "usbd_hid.h"
+#include "usbd_fido_class.h"
 #include "usbd_msc.h"
 
 /* USER CODE BEGIN Includes */
@@ -740,8 +741,10 @@ USBD_StatusTypeDef USBD_LL_SetTestMode(USBD_HandleTypeDef *pdev, uint8_t testmod
   * @retval None
   */
 static uint32_t s_hid_class_mem[2][(sizeof(USBD_HID_HandleTypeDef) + 3U) / 4U];
+static uint32_t s_fido_class_mem[(sizeof(USBD_FIDO_HandleTypeDef) + 3U) / 4U];
 static uint32_t s_msc_class_mem[(sizeof(USBD_MSC_BOT_HandleTypeDef) + 3U) / 4U];
 static uint8_t s_hid_class_mem_used[2] = {0U, 0U};
+static uint8_t s_fido_class_mem_used = 0U;
 static uint8_t s_msc_class_mem_used = 0U;
 static uint32_t s_usbd_fallback_mem[256];
 static uint32_t s_usbd_fallback_offset = 0U;
@@ -774,6 +777,16 @@ void *USBD_static_malloc(uint32_t size)
         start = idx * limit;
         break;
       }
+    }
+  }
+  else if (size == sizeof(USBD_FIDO_HandleTypeDef))
+  {
+    limit = (uint32_t)(sizeof(s_fido_class_mem) / sizeof(s_fido_class_mem[0]));
+    if (s_fido_class_mem_used == 0U)
+    {
+      s_fido_class_mem_used = 1U;
+      ptr = &s_fido_class_mem[0];
+      start = 0U;
     }
   }
   else if (size == sizeof(USBD_MSC_BOT_HandleTypeDef))
@@ -809,6 +822,7 @@ void *USBD_static_malloc(uint32_t size)
     g_a_usb_diag_runtime.malloc_alloc_count =
         (uint32_t)s_hid_class_mem_used[0] +
         (uint32_t)s_hid_class_mem_used[1] +
+        (uint32_t)s_fido_class_mem_used +
         (uint32_t)s_msc_class_mem_used +
         s_usbd_fallback_alloc_count;
     return NULL;
@@ -819,6 +833,7 @@ void *USBD_static_malloc(uint32_t size)
   g_a_usb_diag_runtime.malloc_alloc_count =
       (uint32_t)s_hid_class_mem_used[0] +
       (uint32_t)s_hid_class_mem_used[1] +
+      (uint32_t)s_fido_class_mem_used +
       (uint32_t)s_msc_class_mem_used +
       s_usbd_fallback_alloc_count;
   return ptr;
@@ -836,6 +851,8 @@ void USBD_static_free(void *p)
   uintptr_t hid0_end = (uintptr_t)(&s_hid_class_mem[0][0] + (sizeof(s_hid_class_mem[0]) / sizeof(s_hid_class_mem[0][0])));
   uintptr_t hid1_base = (uintptr_t)&s_hid_class_mem[1][0];
   uintptr_t hid1_end = (uintptr_t)(&s_hid_class_mem[1][0] + (sizeof(s_hid_class_mem[1]) / sizeof(s_hid_class_mem[1][0])));
+  uintptr_t fido_base = (uintptr_t)&s_fido_class_mem[0];
+  uintptr_t fido_end = (uintptr_t)(&s_fido_class_mem[0] + (sizeof(s_fido_class_mem) / sizeof(s_fido_class_mem[0])));
   uintptr_t msc_base = (uintptr_t)&s_msc_class_mem[0];
   uintptr_t msc_end = (uintptr_t)(&s_msc_class_mem[0] + (sizeof(s_msc_class_mem) / sizeof(s_msc_class_mem[0])));
   uintptr_t fallback_base = (uintptr_t)&s_usbd_fallback_mem[0];
@@ -854,6 +871,10 @@ void USBD_static_free(void *p)
   else if ((addr >= hid1_base) && (addr < hid1_end))
   {
     s_hid_class_mem_used[1] = 0U;
+  }
+  else if ((addr >= fido_base) && (addr < fido_end))
+  {
+    s_fido_class_mem_used = 0U;
   }
   else if ((addr >= msc_base) && (addr < msc_end))
   {
@@ -879,6 +900,7 @@ void USBD_static_free(void *p)
   g_a_usb_diag_runtime.malloc_alloc_count =
       (uint32_t)s_hid_class_mem_used[0] +
       (uint32_t)s_hid_class_mem_used[1] +
+      (uint32_t)s_fido_class_mem_used +
       (uint32_t)s_msc_class_mem_used +
       s_usbd_fallback_alloc_count;
 }

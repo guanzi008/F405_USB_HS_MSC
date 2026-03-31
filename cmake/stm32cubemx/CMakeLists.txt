@@ -19,6 +19,8 @@ target_include_directories(stm32cubemx INTERFACE
     ../../USB_DEVICE/CompositeBuilder/Inc
     ../../user_code/my_public
     ../../user_code/my_device
+    ../../user_code/third_party/micro-ecc
+    ../../user_code/third_party/sha256
     ../../Drivers/STM32F4xx_HAL_Driver/Inc
     ../../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Inc
@@ -46,12 +48,17 @@ target_sources(stm32cubemx INTERFACE
     ../../USB_DEVICE/App/usbd_desc.c
     ../../USB_DEVICE/App/usbd_hid_cmsisdap.c
     ../../USB_DEVICE/App/usbd_hid_fido.c
+    ../../USB_DEVICE/App/usbd_fido_class.c
     ../../USB_DEVICE/App/usbd_ctap_min.c
+    ../../USB_DEVICE/App/fido_crypto.c
+    ../../USB_DEVICE/App/fido_store.c
     ../../USB_DEVICE/App/usbd_storage_if.c
     ../../USB_DEVICE/Target/usbd_conf.c
     ../../USB_DEVICE/CompositeBuilder/Src/usbd_composite_builder.c
     ../../user_code/my_public/my_redifine.c
     ../../user_code/my_device/led_and_key.c
+    ../../user_code/third_party/micro-ecc/uECC.c
+    ../../user_code/third_party/sha256/sha256.c
     ../../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd.c
     ../../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c
     ../../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usb.c
@@ -94,6 +101,13 @@ target_link_directories(stm32cubemx INTERFACE
 )
 
 target_link_libraries(stm32cubemx INTERFACE
+)
+
+set_source_files_properties(
+    ../../user_code/third_party/micro-ecc/uECC.c
+    PROPERTIES
+    COMPILE_DEFINITIONS
+    "uECC_PLATFORM=uECC_arch_other;uECC_OPTIMIZATION_LEVEL=1;uECC_SUPPORTS_secp160r1=0;uECC_SUPPORTS_secp192r1=0;uECC_SUPPORTS_secp224r1=0;uECC_SUPPORTS_secp256k1=0;uECC_SUPPORT_COMPRESSED_POINT=0;uECC_ENABLE_VLI_API=0"
 )
 
 # Validate that STM32CubeMX code is compatible with C standard

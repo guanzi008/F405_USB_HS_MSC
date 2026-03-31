@@ -5,7 +5,7 @@
 #include "usbd_conf.h"
 #include "usbd_ctap_min.h"
 
-static const uint8_t k_fido_hid_report_desc[FIDO_HID_REPORT_DESC_SIZE] = {
+__ALIGN_BEGIN static uint8_t k_fido_hid_report_desc[FIDO_HID_REPORT_DESC_SIZE] __ALIGN_END = {
     0x06U, 0xD0U, 0xF1U,
     0x09U, 0x01U,
     0xA1U, 0x01U,
@@ -114,6 +114,8 @@ static uint32_t fido_allocate_cid(usbd_hid_fido_state_t *state)
 
 static void fido_process_message(usbd_hid_fido_state_t *state)
 {
+  uint16_t resp_len = 0U;
+
   if (state->rx_cmd == FIDO_HID_CMD_INIT)
   {
     uint8_t payload[17];
@@ -147,15 +149,25 @@ static void fido_process_message(usbd_hid_fido_state_t *state)
 
   if (state->rx_cmd == FIDO_HID_CMD_CBOR)
   {
-    uint16_t resp_len = 0U;
+    uint8_t result = usbd_ctap_min_handle_cbor(state->rx_buf,
+                                               state->rx_expected_len,
+                                               state->tx_buf,
+                                               (uint16_t)sizeof(state->tx_buf),
+                                               &resp_len);
 
-    if (usbd_ctap_min_handle_cbor(state->rx_buf,
-                                  state->rx_expected_len,
-                                  state->tx_buf,
-                                  (uint16_t)sizeof(state->tx_buf),
-                                  &resp_len) == 0U)
+    if (result == 0U)
     {
       fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+      return;
+    }
+
+    if (result == USBD_CTAP_MIN_PENDING)
+    {
+      state->wait_user_presence = 1U;
+      state->pending_cbor_len = state->rx_expected_len;
+      state->last_keepalive_ms = HAL_GetTick();
+      state->tx_buf[0] = FIDO_HID_KEEPALIVE_UPNEEDED;
+      fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
       return;
     }
 
@@ -327,6 +339,90 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
     state->tx_active = 0U;
     state->tx_offset = 0U;
     state->tx_len = 0U;
+    state->tx_seq = 0U;
+  }
+
+  fido_diag_note_tx(response, FIDO_HID_PACKET_SIZE, response[4]);
+  return FIDO_HID_PACKET_SIZE;
+}
+
+uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
+                               uint8_t class_id,
+                               usbd_hid_fido_state_t *state,
+                               uint8_t *response,
+                               uint16_t response_cap,
+                               uint32_t now_ms)
+{
+  uint16_t resp_len = 0U;
+  usbd_ctap_min_ui_status_t ui;
+
+  if ((pdev == NULL) || (state == NULL) || (response == NULL) || (response_cap < FIDO_HID_PACKET_SIZE))
+  {
+    return 0U;
+  }
+
+  if ((state->wait_user_presence == 0U) || (state->tx_active != 0U))
+  {
+    return 0U;
+  }
+
+  usbd_ctap_min_get_ui_status(&ui);
+  if (ui.ui_state == USBD_CTAP_UI_CONFIRMED)
+  {
+    if (usbd_ctap_min_complete_pending(state->rx_buf,
+                                       state->pending_cbor_len,
+                                       1U,
+                                       state->tx_buf,
+                                       (uint16_t)sizeof(state->tx_buf),
+                                       &resp_len) == 0U)
+    {
+      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+    }
+    else
+    {
+      fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
+    }
+    state->wait_user_presence = 0U;
+    state->pending_cbor_len = 0U;
+  }
+  else if ((uint32_t)(now_ms - state->last_keepalive_ms) >= 250U)
+  {
+    state->last_keepalive_ms = now_ms;
+    state->tx_buf[0] = FIDO_HID_KEEPALIVE_UPNEEDED;
+    fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
+  }
+
+  if (state->tx_active == 0U)
+  {
+    return 0U;
+  }
+
+  memset(response, 0, response_cap);
+  fido_store_be32(response, state->tx_cid);
+  response[4] = (uint8_t)(0x80U | state->tx_cmd);
+  response[5] = (uint8_t)(state->tx_len >> 8);
+  response[6] = (uint8_t)(state->tx_len);
+  resp_len = state->tx_len;
+  if (resp_len > (FIDO_HID_PACKET_SIZE - 7U))
+  {
+    resp_len = FIDO_HID_PACKET_SIZE - 7U;
+  }
+  if (resp_len != 0U)
+  {
+    memcpy(&response[7], state->tx_buf, resp_len);
+  }
+
+  state->tx_offset = resp_len;
+  if (state->tx_offset >= state->tx_len)
+  {
+    state->tx_active = 0U;
+    state->tx_offset = 0U;
+    state->tx_len = 0U;
+    state->tx_seq = 0U;
+  }
+  else
+  {
+    state->tx_active = 1U;
     state->tx_seq = 0U;
   }
 

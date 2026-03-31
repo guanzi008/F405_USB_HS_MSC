@@ -92,6 +92,7 @@ EndBSPDependencies */
 static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
 static uint8_t USBD_HID_DeInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
 static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *req);
+static uint8_t USBD_HID_EP0_RxReady(USBD_HandleTypeDef *pdev);
 static uint8_t USBD_HID_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum);
 static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum);
 #ifndef USE_USBD_COMPOSITE
@@ -106,6 +107,11 @@ static uint16_t USBD_HID_GetReportDescForClass(USBD_HandleTypeDef *pdev,
                                                uint8_t class_id,
                                                uint8_t **pbuf);
 static uint8_t *USBD_HID_GetDescForClass(USBD_HandleTypeDef *pdev, uint8_t class_id);
+static uint16_t USBD_HID_ProcessOutputReport(USBD_HandleTypeDef *pdev,
+                                             uint8_t class_id,
+                                             USBD_HID_HandleTypeDef *hhid,
+                                             const uint8_t *report,
+                                             uint16_t report_len);
 /**
   * @}
   */
@@ -120,7 +126,7 @@ USBD_ClassTypeDef USBD_HID =
   USBD_HID_DeInit,
   USBD_HID_Setup,
   NULL,              /* EP0_TxSent */
-  NULL,              /* EP0_RxReady */
+  USBD_HID_EP0_RxReady,
   USBD_HID_DataIn,   /* DataIn */
   USBD_HID_DataOut,  /* DataOut */
   NULL,              /* SOF */
@@ -312,6 +318,36 @@ static uint8_t *USBD_HID_GetDescForClass(USBD_HandleTypeDef *pdev, uint8_t class
   return USBD_HID_DescRuntime;
 }
 
+static uint16_t USBD_HID_ProcessOutputReport(USBD_HandleTypeDef *pdev,
+                                             uint8_t class_id,
+                                             USBD_HID_HandleTypeDef *hhid,
+                                             const uint8_t *report,
+                                             uint16_t report_len)
+{
+  if ((hhid == NULL) || (report == NULL))
+  {
+    return 0U;
+  }
+
+  if (pdev->tclasslist[class_id].ClassType == CLASS_TYPE_CHID)
+  {
+    return usbd_hid_fido_process(pdev,
+                                 class_id,
+                                 &s_fido_state,
+                                 report,
+                                 report_len,
+                                 hhid->tx_report,
+                                 sizeof(hhid->tx_report));
+  }
+
+  return usbd_hid_cmsisdap_process(pdev,
+                                   class_id,
+                                   report,
+                                   report_len,
+                                   hhid->tx_report,
+                                   sizeof(hhid->tx_report));
+}
+
 /**
   * @}
   */
@@ -373,6 +409,9 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   hhid->rx_len = 0U;
   hhid->tx_len = 0U;
   hhid->pending_tx_len = 0U;
+  hhid->ctrl_report_len = 0U;
+  hhid->ctrl_report_id = 0U;
+  hhid->ctrl_report_type = 0U;
   hhid->pending_tx = 0U;
   if (pdev->tclasslist[pdev->classId].ClassType == CLASS_TYPE_CHID)
   {
@@ -466,6 +505,32 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
           (void)USBD_CtlSendData(pdev, (uint8_t *)&hhid->IdleState, 1U);
           break;
 
+        case USBD_HID_REQ_GET_REPORT:
+        {
+          len = MIN(req->wLength, (uint16_t)HID_CTRL_REPORT_SIZE);
+          hhid->ctrl_report_len = len;
+          hhid->ctrl_report_type = (uint8_t)(req->wValue >> 8);
+          hhid->ctrl_report_id = (uint8_t)(req->wValue & 0xFFU);
+          USBD_memset(hhid->ctrl_report, 0, sizeof(hhid->ctrl_report));
+          if ((hhid->ctrl_report_id != 0U) && (len != 0U))
+          {
+            hhid->ctrl_report[0] = hhid->ctrl_report_id;
+          }
+          (void)USBD_CtlSendData(pdev, hhid->ctrl_report, len);
+          break;
+        }
+
+        case USBD_HID_REQ_SET_REPORT:
+          len = MIN(req->wLength, (uint16_t)HID_CTRL_REPORT_SIZE);
+          hhid->ctrl_report_len = len;
+          hhid->ctrl_report_type = (uint8_t)(req->wValue >> 8);
+          hhid->ctrl_report_id = (uint8_t)(req->wValue & 0xFFU);
+          if (len != 0U)
+          {
+            (void)USBD_CtlPrepareRx(pdev, hhid->ctrl_report, len);
+          }
+          break;
+
         default:
           USBD_CtlError(pdev, req);
           ret = USBD_FAIL;
@@ -549,6 +614,58 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
   }
 
   return (uint8_t)ret;
+}
+
+static uint8_t USBD_HID_EP0_RxReady(USBD_HandleTypeDef *pdev)
+{
+  USBD_HID_HandleTypeDef *hhid = (USBD_HID_HandleTypeDef *)pdev->pClassDataCmsit[pdev->classId];
+  uint16_t report_len;
+  const uint8_t *report;
+  uint16_t tx_len;
+  uint8_t in_ep_add;
+
+  if (hhid == NULL)
+  {
+    return (uint8_t)USBD_FAIL;
+  }
+
+  report = hhid->ctrl_report;
+  report_len = hhid->ctrl_report_len;
+
+  if ((hhid->ctrl_report_id != 0U) &&
+      (report_len > 1U) &&
+      (report[0] == hhid->ctrl_report_id))
+  {
+    report = &report[1];
+    report_len--;
+  }
+
+  tx_len = USBD_HID_ProcessOutputReport(pdev,
+                                        (uint8_t)pdev->classId,
+                                        hhid,
+                                        report,
+                                        report_len);
+  if (tx_len != 0U)
+  {
+    in_ep_add = USBD_HID_GetInEpAdd(pdev, (uint8_t)pdev->classId);
+    hhid->tx_len = tx_len;
+    if (hhid->state == USBD_HID_IDLE)
+    {
+      hhid->state = USBD_HID_BUSY;
+      (void)USBD_LL_Transmit(pdev, in_ep_add, hhid->tx_report, tx_len);
+    }
+    else
+    {
+      hhid->pending_tx = 1U;
+      hhid->pending_tx_len = tx_len;
+    }
+  }
+
+  hhid->ctrl_report_len = 0U;
+  hhid->ctrl_report_id = 0U;
+  hhid->ctrl_report_type = 0U;
+
+  return (uint8_t)USBD_OK;
 }
 
 
@@ -741,25 +858,11 @@ static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
 
   rx_len = (uint16_t)USBD_LL_GetRxDataSize(pdev, epnum);
   hhid->rx_len = rx_len;
-  if (pdev->tclasslist[pdev->classId].ClassType == CLASS_TYPE_CHID)
-  {
-    tx_len = usbd_hid_fido_process(pdev,
-                                   (uint8_t)pdev->classId,
-                                   &s_fido_state,
-                                   hhid->rx_report,
-                                   rx_len,
-                                   hhid->tx_report,
-                                   sizeof(hhid->tx_report));
-  }
-  else
-  {
-    tx_len = usbd_hid_cmsisdap_process(pdev,
-                                       (uint8_t)pdev->classId,
-                                       hhid->rx_report,
-                                       rx_len,
-                                       hhid->tx_report,
-                                       sizeof(hhid->tx_report));
-  }
+  tx_len = USBD_HID_ProcessOutputReport(pdev,
+                                        (uint8_t)pdev->classId,
+                                        hhid,
+                                        hhid->rx_report,
+                                        rx_len);
   if (tx_len != 0U)
   {
     hhid->tx_len = tx_len;

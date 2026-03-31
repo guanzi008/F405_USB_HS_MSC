@@ -17,6 +17,9 @@
 #define FIDO_HID_CMD_ERROR          0x3FU
 #define FIDO_HID_CMD_KEEPALIVE      0x3BU
 
+#define FIDO_HID_KEEPALIVE_PROCESSING 0x01U
+#define FIDO_HID_KEEPALIVE_UPNEEDED   0x02U
+
 #define FIDO_HID_ERR_INVALID_CMD     0x01U
 #define FIDO_HID_ERR_INVALID_PAR     0x02U
 #define FIDO_HID_ERR_INVALID_LEN     0x03U
@@ -41,6 +44,9 @@ typedef struct
   uint8_t tx_seq;
   uint8_t rx_active;
   uint8_t tx_active;
+  uint8_t wait_user_presence;
+  uint16_t pending_cbor_len;
+  uint32_t last_keepalive_ms;
   uint8_t rx_buf[FIDO_HID_MSG_MAX];
   uint8_t tx_buf[FIDO_HID_MSG_MAX];
 } usbd_hid_fido_state_t;
@@ -54,5 +60,11 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
                                uint16_t request_len,
                                uint8_t *response,
                                uint16_t response_cap);
+uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
+                               uint8_t class_id,
+                               usbd_hid_fido_state_t *state,
+                               uint8_t *response,
+                               uint16_t response_cap,
+                               uint32_t now_ms);
 
 #endif

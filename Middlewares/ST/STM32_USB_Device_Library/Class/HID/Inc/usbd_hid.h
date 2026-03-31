@@ -48,6 +48,7 @@ extern "C" {
 #endif /* HID_EPOUT_ADDR */
 #define HID_EPIN_SIZE                              0x40U
 #define HID_EPOUT_SIZE                             0x40U
+#define HID_CTRL_REPORT_SIZE                       (HID_EPIN_SIZE + 1U)
 
 #define USB_HID_CONFIG_DESC_SIZ                    41U
 #define USB_HID_DESC_SIZ                           9U
@@ -96,9 +97,13 @@ typedef struct
   uint16_t rx_len;
   uint16_t tx_len;
   uint16_t pending_tx_len;
+  uint16_t ctrl_report_len;
+  uint8_t ctrl_report_id;
+  uint8_t ctrl_report_type;
   uint8_t pending_tx;
   uint8_t rx_report[HID_EPOUT_SIZE];
   uint8_t tx_report[HID_EPIN_SIZE];
+  uint8_t ctrl_report[HID_CTRL_REPORT_SIZE];
 } USBD_HID_HandleTypeDef;
 
 /*

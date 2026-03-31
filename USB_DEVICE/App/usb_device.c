@@ -25,6 +25,7 @@
 #include "usbd_desc.h"
 #include "usbd_composite_builder.h"
 #include "usbd_hid.h"
+#include "usbd_fido_class.h"
 #include "usbd_msc.h"
 #include "usbd_storage_if.h"
 
@@ -77,7 +78,7 @@ USBD_StatusTypeDef My_USB_HS_HID_MSC_Init(void)
     return result;
 
   result = USBD_RegisterClassComposite(&hUsbDeviceHS,
-                                       &USBD_HID,
+                                       &USBD_FIDO_HID,
                                        CLASS_TYPE_CHID,
                                        s_fido_hid_ep_add);
   if (result != USBD_OK)
