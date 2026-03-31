@@ -5,6 +5,7 @@
 #include "ext_flash_w25q.h"
 
 #define FIDO_STORE_MAGIC   0x554C4644u
+#define FIDO_STORE_VERSION_V1 0x0001u
 #define FIDO_STORE_VERSION 0x0002u
 
 typedef struct
@@ -65,7 +66,7 @@ static uint8_t fido_store_slot_valid(const fido_store_slot_t *slot)
 {
   return (uint8_t)((slot != NULL) &&
                    (slot->magic == FIDO_STORE_MAGIC) &&
-                   (slot->version == FIDO_STORE_VERSION) &&
+                   ((slot->version == FIDO_STORE_VERSION_V1) || (slot->version == FIDO_STORE_VERSION)) &&
                    (slot->credential_id_len != 0U) &&
                    (slot->credential_id_len <= FIDO_CREDENTIAL_ID_SIZE));
 }
@@ -76,14 +77,22 @@ static void fido_store_copy_out(const fido_store_slot_t *slot, fido_store_creden
   credential->counter = slot->counter;
   credential->sign_count = slot->sign_count;
   credential->credential_id_len = slot->credential_id_len;
-  credential->user_id_len = slot->user_id_len;
   memcpy(credential->rp_id_hash, slot->rp_id_hash, sizeof(credential->rp_id_hash));
   memcpy(credential->credential_id, slot->credential_id, sizeof(credential->credential_id));
   memcpy(credential->private_key, slot->private_key, sizeof(credential->private_key));
   memcpy(credential->public_key, slot->public_key, sizeof(credential->public_key));
-  memcpy(credential->user_id, slot->user_id, sizeof(credential->user_id));
-  memcpy(credential->user_name, slot->user_name, sizeof(credential->user_name));
-  memcpy(credential->user_display_name, slot->user_display_name, sizeof(credential->user_display_name));
+  if (slot->version >= FIDO_STORE_VERSION)
+  {
+    if (slot->user_id_len <= sizeof(credential->user_id))
+    {
+      credential->user_id_len = slot->user_id_len;
+      memcpy(credential->user_id, slot->user_id, sizeof(credential->user_id));
+    }
+    memcpy(credential->user_name, slot->user_name, sizeof(credential->user_name));
+    credential->user_name[sizeof(credential->user_name) - 1U] = '\0';
+    memcpy(credential->user_display_name, slot->user_display_name, sizeof(credential->user_display_name));
+    credential->user_display_name[sizeof(credential->user_display_name) - 1U] = '\0';
+  }
 }
 
 uint8_t fido_store_is_ready(void)
