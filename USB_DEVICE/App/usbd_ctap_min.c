@@ -1171,6 +1171,11 @@ void usbd_ctap_min_note_user_presence(void)
   s_ctap_user_presence_latched = 1U;
 }
 
+void usbd_ctap_min_note_user_denied(void)
+{
+  s_ctap_user_presence_latched = 2U;
+}
+
 void usbd_ctap_min_get_ui_status(usbd_ctap_min_ui_status_t *status)
 {
   if (status == NULL)
@@ -1181,8 +1186,12 @@ void usbd_ctap_min_get_ui_status(usbd_ctap_min_ui_status_t *status)
   status->ui_state = s_ctap_ui_state;
   status->pending_cmd = s_ctap_pending_cmd;
 
-  if ((s_ctap_ui_state == USBD_CTAP_UI_WAIT_TOUCH) && (s_ctap_user_presence_latched != 0U))
+  if ((s_ctap_ui_state == USBD_CTAP_UI_WAIT_TOUCH) && (s_ctap_user_presence_latched == 1U))
   {
     status->ui_state = USBD_CTAP_UI_CONFIRMED;
+  }
+  else if ((s_ctap_ui_state == USBD_CTAP_UI_WAIT_TOUCH) && (s_ctap_user_presence_latched == 2U))
+  {
+    status->ui_state = USBD_CTAP_UI_DENIED;
   }
 }

@@ -47,6 +47,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                        uint16_t resp_cap,
                                        uint16_t *resp_len);
 void usbd_ctap_min_note_user_presence(void);
+void usbd_ctap_min_note_user_denied(void);
 void usbd_ctap_min_get_ui_status(usbd_ctap_min_ui_status_t *status);
 
 #endif

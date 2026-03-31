@@ -1,6 +1,7 @@
 #include "lcd_status.h"
 
 #include "ls013_lcd.h"
+#include "usbd_ctap_min.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -309,6 +310,27 @@ static void lcd_draw_input_page(void) {
     lcd_draw_text_line(7u, "LONG:PURPLE");
 }
 
+static void lcd_draw_fido_popup(void)
+{
+    const char *cmd_text = "SECURITY";
+
+    if (s_last_fido_pending_cmd == CTAP_CMD_MAKE_CREDENTIAL) {
+        cmd_text = "MAKE CRED";
+    } else if (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION) {
+        cmd_text = "GET ASSERT";
+    } else if (s_last_fido_pending_cmd == CTAP_CMD_GET_INFO) {
+        cmd_text = "GET INFO";
+    }
+
+    ls013_lcd_rect(12u, 34u, 104u, 60u, 0u);
+    ls013_lcd_frame(12u, 34u, 104u, 60u, 1u);
+    ls013_lcd_frame(14u, 36u, 100u, 56u, 1u);
+    lcd_draw_text_line(1u, " FIDO CONFIRM");
+    lcd_draw_text_line(3u, cmd_text);
+    lcd_draw_text_line(5u, "SHORT [OK]");
+    lcd_draw_text_line(6u, "LONG  [BACK]");
+}
+
 static void lcd_redraw_page(void) {
     if (s_menu_active != 0u) {
         lcd_draw_menu_page();
@@ -327,6 +349,9 @@ static void lcd_redraw_page(void) {
             lcd_draw_input_page();
             break;
       }
+    }
+    if (s_last_fido_ui_state == USBD_CTAP_UI_WAIT_TOUCH) {
+        lcd_draw_fido_popup();
     }
     ls013_lcd_send_frame();
 }

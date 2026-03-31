@@ -139,7 +139,15 @@ int main(void)
     }
     if ((input_events & AUX_INPUT_EVENT_BTN_LONG) != 0u)
     {
-      lcd_status_back();
+      usbd_ctap_min_get_ui_status(&fido_ui);
+      if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+      {
+        usbd_ctap_min_note_user_denied();
+      }
+      else
+      {
+        lcd_status_back();
+      }
     }
     aux_inputs_get_status(&aux_status);
     if (lcd_status_is_menu_active() != 0u)

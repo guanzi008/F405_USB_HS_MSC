@@ -385,6 +385,24 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
     state->wait_user_presence = 0U;
     state->pending_cbor_len = 0U;
   }
+  else if (ui.ui_state == USBD_CTAP_UI_DENIED)
+  {
+    if (usbd_ctap_min_complete_pending(state->rx_buf,
+                                       state->pending_cbor_len,
+                                       0U,
+                                       state->tx_buf,
+                                       (uint16_t)sizeof(state->tx_buf),
+                                       &resp_len) == 0U)
+    {
+      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+    }
+    else
+    {
+      fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
+    }
+    state->wait_user_presence = 0U;
+    state->pending_cbor_len = 0U;
+  }
   else if ((uint32_t)(now_ms - state->last_keepalive_ms) >= 250U)
   {
     state->last_keepalive_ms = now_ms;
