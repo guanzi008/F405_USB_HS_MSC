@@ -18,19 +18,18 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "dma.h"
-#include "rtc.h"
-#include "tim.h"
 #include "usart.h"
-#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "sdio.h"
 #include <stdio.h>
-#include "led_and_key.h"
 #include "usb_device.h"
 #include "my_redifine.h"
+#include "usbd_conf.h"
+#include "usbd_core.h"
+#include "aux_inputs.h"
+#include "ext_flash_w25q.h"
+#include "lcd_status.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,6 +48,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+extern USBD_HandleTypeDef hUsbDeviceHS;
 
 /* USER CODE BEGIN PV */
 
@@ -93,45 +93,20 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_RTC_Init();
-  MX_TIM7_Init();
-  MX_USART6_UART_Init();
+  MX_UART4_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim7);
 
-  puts("开始测试");
+  puts("A actual-board USB test");
   printf("%s编译时间 %s %s\n", __FILE__, __DATE__, __TIME__);
 
-  HAL_Delay(100);
-  My_SDIO_SD_Init_Fixed();
+  ext_flash_init();
 
-  // SD卡信息结构体变量
-  HAL_SD_CardInfoTypeDef cardInfo;
-  HAL_StatusTypeDef res1 = HAL_SD_GetCardInfo(&hsd, &cardInfo);
-  
-  if (res1 != HAL_OK) {
-    printf("HAL_SD_GetCardInfo() error\r\n");
-  } 
-  else {
-    printf("\r\n*** HAL_SD_GetCardInfo() info ***\r\n");
-    printf("Card Type= %ld\r\n", cardInfo.CardType);
-    printf("Card Version= %ld\r\n", cardInfo.CardVersion);
-    printf("Card Class= %ld\r\n", cardInfo.Class);
-    printf("Relative Card Address= %ld\r\n", cardInfo.RelCardAdd);
-    printf("Block Count= %ld\r\n", cardInfo.BlockNbr);
-    printf("Block Size(Bytes)= %ld\r\n", cardInfo.BlockSize);
-    printf("LogiBlockCount= %ld\r\n", cardInfo.LogBlockNbr);
-    printf("LogiBlockSize(Bytes)= %ld\r\n", cardInfo.LogBlockSize);
-    printf("SD Card Capacity(MB)= %ld\r\n", cardInfo.BlockNbr >> 1 >> 10);
-  }
-
-
-  if(My_USB_HS_MSC_Init() != USBD_OK)
+  if(My_USB_HS_HID_MSC_Init() != USBD_OK)
   {
-    puts("usb hs msc init fail");
+    puts("usb hs hid+msc init fail");
   }
+  aux_inputs_init();
+  lcd_status_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -139,6 +114,85 @@ int main(void)
 
   while (1)
   {
+    static uint32_t last_log_ms = 0;
+    aux_inputs_status_t aux_status;
+    ext_flash_info_t flash_info;
+    uint32_t now = HAL_GetTick();
+
+    (void)aux_inputs_poll(now);
+    aux_inputs_get_status(&aux_status);
+    ext_flash_get_info(&flash_info);
+    if ((now - last_log_ms) >= 1000U)
+    {
+      last_log_ms = now;
+      a_usb_diag_capture_registers();
+      lcd_status_update((uint8_t)hUsbDeviceHS.dev_state,
+                        (uint8_t)hUsbDeviceHS.dev_config,
+                        g_a_usb_diag_runtime.reset_count,
+                        g_a_usb_diag_runtime.setup_count,
+                        g_a_usb_diag_runtime.data_out_count,
+                        g_a_usb_diag_runtime.data_in_count,
+                        g_a_usb_diag_runtime.suspend_count,
+                        g_a_usb_diag_runtime.cmsis_rx_count,
+                        g_a_usb_diag_runtime.cmsis_tx_count,
+                        g_a_usb_diag_runtime.fido_rx_count,
+                        g_a_usb_diag_runtime.fido_tx_count,
+                        g_a_usb_diag_runtime.fido_last_req_word0,
+                        g_a_usb_diag_runtime.fido_last_rsp_word0,
+                        g_a_usb_diag_runtime.fido_last_status,
+                        flash_info.present,
+                        flash_info.jedec_id,
+                        flash_info.capacity_bytes,
+                        flash_info.spi_mode,
+                        aux_status.enc_a,
+                        aux_status.enc_b,
+                        aux_status.enc_btn,
+                        aux_status.encoder_position,
+                        aux_status.last_events);
+      printf("AUSB R=%lu S=%lu O=%lu I=%lu U=%lu C=%lu D=%lu IRQ=%lu AS=%lu OS=%lu LEP=%lu LFS=%lu DS=%u CFG=%lu\r\n",
+             g_a_usb_diag_runtime.reset_count,
+             g_a_usb_diag_runtime.setup_count,
+             g_a_usb_diag_runtime.data_out_count,
+             g_a_usb_diag_runtime.data_in_count,
+             g_a_usb_diag_runtime.suspend_count,
+             g_a_usb_diag_runtime.connect_count,
+             g_a_usb_diag_runtime.disconnect_count,
+             g_a_usb_diag_runtime.irq_count,
+             g_a_usb_diag_runtime.activate_setup_count,
+             g_a_usb_diag_runtime.ep0_out_start_count,
+             g_a_usb_diag_runtime.open_ep_count,
+             g_a_usb_diag_runtime.open_ep_fail_count,
+             hUsbDeviceHS.dev_state,
+             hUsbDeviceHS.dev_config);
+      printf("AHID C=%lu CLS=%lu BM=%02lX BR=%02lX WV=%04lX WI=%04lX WL=%04lX RL=%lu\r\n",
+             g_a_usb_diag_runtime.hid_setup_count,
+             g_a_usb_diag_runtime.hid_last_class,
+             g_a_usb_diag_runtime.hid_last_bmRequest & 0xFFu,
+             g_a_usb_diag_runtime.hid_last_bRequest & 0xFFu,
+             g_a_usb_diag_runtime.hid_last_wValue & 0xFFFFu,
+             g_a_usb_diag_runtime.hid_last_wIndex & 0xFFFFu,
+             g_a_usb_diag_runtime.hid_last_wLength & 0xFFFFu,
+             g_a_usb_diag_runtime.hid_last_report_len);
+      printf("AIF C=%lu IDX=%lu CLS=%lu BM=%02lX BR=%02lX ST=%lu\r\n",
+             g_a_usb_diag_runtime.itf_req_count,
+             g_a_usb_diag_runtime.itf_last_index,
+             g_a_usb_diag_runtime.itf_last_class,
+             g_a_usb_diag_runtime.itf_last_bmRequest & 0xFFu,
+             g_a_usb_diag_runtime.itf_last_bRequest & 0xFFu,
+             g_a_usb_diag_runtime.itf_last_status);
+      printf("AFID RX=%lu TX=%lu RL=%lu TL=%lu RW0=%08lX RW1=%08lX TW0=%08lX TW1=%08lX ST=%lu\r\n",
+             g_a_usb_diag_runtime.fido_rx_count,
+             g_a_usb_diag_runtime.fido_tx_count,
+             g_a_usb_diag_runtime.fido_last_req_len,
+             g_a_usb_diag_runtime.fido_last_rsp_len,
+             g_a_usb_diag_runtime.fido_last_req_word0,
+             g_a_usb_diag_runtime.fido_last_req_word1,
+             g_a_usb_diag_runtime.fido_last_rsp_word0,
+             g_a_usb_diag_runtime.fido_last_rsp_word1,
+             g_a_usb_diag_runtime.fido_last_status);
+    }
+
+    lcd_status_tick(now);
 
    
     /* USER CODE END WHILE */
@@ -165,12 +219,12 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.LSEState = RCC_LSE_OFF;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 7;
@@ -195,15 +249,6 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-/*基本定时器周期回调函数*/
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{ 
-  if(htim == &htim7)
-  {
-    
-    LED0_Toggle();
-  }
-}
 /* USER CODE END 4 */
 
 /**
