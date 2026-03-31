@@ -18,6 +18,7 @@
 
 #define BUZZER_Pin GPIO_PIN_14
 #define BUZZER_GPIO_Port GPIOB
+#define ENC_POSITION_STEP 2
 
 typedef struct {
     uint8_t last_ab;
@@ -30,9 +31,10 @@ typedef struct {
     int32_t encoder_position;
     uint32_t last_events;
     uint32_t event_count;
+    uint32_t pending_events;
 } aux_state_t;
 
-static aux_state_t s_aux;
+static volatile aux_state_t s_aux;
 
 static int8_t aux_quad_delta(uint8_t prev_state, uint8_t curr_state) {
     static const int8_t k_delta[16] = {
@@ -53,6 +55,44 @@ static uint8_t aux_read_ab(void) {
 
 static uint8_t aux_read_btn(void) {
     return ((GPIOC->IDR & ENC_BTN_Pin) != 0u) ? 1u : 0u;
+}
+
+static void aux_record_events(uint32_t events) {
+    if (events == AUX_INPUT_EVENT_NONE) {
+        return;
+    }
+
+    s_aux.pending_events |= events;
+    s_aux.last_events = events;
+    s_aux.event_count += 1u;
+}
+
+static void aux_process_ab_sample(uint32_t now_ms) {
+    uint8_t ab = aux_read_ab();
+
+    (void)now_ms;
+
+    if (ab != s_aux.last_ab) {
+        int8_t delta = aux_quad_delta(s_aux.last_ab, ab);
+        s_aux.last_ab = ab;
+        if (delta == 0) {
+            s_aux.accum = 0;
+        } else {
+            uint32_t events = AUX_INPUT_EVENT_NONE;
+
+            s_aux.accum = (int8_t)(s_aux.accum + delta);
+            if (s_aux.accum >= ENC_POSITION_STEP) {
+                s_aux.accum = 0;
+                s_aux.encoder_position += 1;
+                events |= AUX_INPUT_EVENT_CW;
+            } else if (s_aux.accum <= -ENC_POSITION_STEP) {
+                s_aux.accum = 0;
+                s_aux.encoder_position -= 1;
+                events |= AUX_INPUT_EVENT_CCW;
+            }
+            aux_record_events(events);
+        }
+    }
 }
 
 static void aux_config_outputs(void) {
@@ -81,22 +121,21 @@ static void aux_config_inputs(void) {
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
 
-    GPIO_InitStruct.Pin = ENC_A_Pin | ENC_B_Pin | ENC_BTN_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pin = ENC_A_Pin | ENC_B_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
     GPIO_InitStruct.Pull = GPIO_PULLUP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = ENC_BTN_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5u, 0u);
+    HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
 
 static void aux_apply_event_feedback(uint32_t events) {
-    if ((events & AUX_INPUT_EVENT_CW) != 0u) {
-        aux_rgb_set(0u, 1u, 0u);
-        aux_beep(2400u, 18u);
-    } else if ((events & AUX_INPUT_EVENT_CCW) != 0u) {
-        aux_rgb_set(1u, 0u, 0u);
-        aux_beep(1800u, 18u);
-    }
-
     if ((events & AUX_INPUT_EVENT_BTN_SHORT) != 0u) {
         aux_rgb_set(0u, 1u, 1u);
         aux_beep(2800u, 36u);
@@ -122,35 +161,15 @@ void aux_inputs_init(void) {
     s_aux.encoder_position = 0;
     s_aux.last_events = AUX_INPUT_EVENT_NONE;
     s_aux.event_count = 0u;
+    s_aux.pending_events = AUX_INPUT_EVENT_NONE;
 
     aux_rgb_set(0u, 0u, 1u);
 }
 
 uint32_t aux_inputs_poll(uint32_t now_ms) {
     uint32_t events = AUX_INPUT_EVENT_NONE;
-    uint8_t ab = aux_read_ab();
     uint8_t btn = aux_read_btn();
-    uint8_t raw_a = (uint8_t)((ab >> 1) & 0x1u);
-    uint8_t raw_b = (uint8_t)(ab & 0x1u);
-
-    if (ab != s_aux.last_ab) {
-        int8_t delta = aux_quad_delta(s_aux.last_ab, ab);
-        s_aux.last_ab = ab;
-        if (delta == 0) {
-            s_aux.accum = 0;
-        } else {
-            s_aux.accum = (int8_t)(s_aux.accum + delta);
-            if (s_aux.accum >= 4) {
-                s_aux.accum = 0;
-                s_aux.encoder_position += 1;
-                events |= AUX_INPUT_EVENT_CW;
-            } else if (s_aux.accum <= -4) {
-                s_aux.accum = 0;
-                s_aux.encoder_position -= 1;
-                events |= AUX_INPUT_EVENT_CCW;
-            }
-        }
-    }
+    uint32_t pending_events;
 
     if (btn != s_aux.btn_last_sample) {
         s_aux.btn_last_sample = btn;
@@ -176,13 +195,20 @@ uint32_t aux_inputs_poll(uint32_t now_ms) {
         events |= AUX_INPUT_EVENT_BTN_LONG;
     }
 
+    __disable_irq();
+    pending_events = s_aux.pending_events;
+    s_aux.pending_events = AUX_INPUT_EVENT_NONE;
+    __enable_irq();
+    events |= pending_events;
+
     if (events != AUX_INPUT_EVENT_NONE) {
-        s_aux.last_events = events;
-        s_aux.event_count += 1u;
+        if ((events & (AUX_INPUT_EVENT_BTN_SHORT | AUX_INPUT_EVENT_BTN_LONG)) != 0u) {
+            s_aux.last_events = events;
+            s_aux.event_count += 1u;
+        }
         aux_apply_event_feedback(events);
     } else {
-        /* Mirror raw active-low input state so board response is visible even if decode fails. */
-        aux_rgb_set((uint8_t)(raw_a == 0u), (uint8_t)(raw_b == 0u), (uint8_t)(btn == 0u));
+        aux_rgb_set(0u, 0u, 0u);
     }
 
     return events;
@@ -235,5 +261,11 @@ void aux_beep(uint16_t freq_hz, uint16_t dur_ms) {
         for (volatile uint32_t wait = 0u; wait < (half_period_us * 18u); ++wait) {
             __asm volatile ("nop");
         }
+    }
+}
+
+void aux_inputs_handle_exti(uint16_t gpio_pin, uint32_t now_ms) {
+    if ((gpio_pin == ENC_A_Pin) || (gpio_pin == ENC_B_Pin)) {
+        aux_process_ab_sample(now_ms);
     }
 }

@@ -21,6 +21,7 @@ typedef struct {
 void aux_inputs_init(void);
 uint32_t aux_inputs_poll(uint32_t now_ms);
 void aux_inputs_get_status(aux_inputs_status_t *status);
+void aux_inputs_handle_exti(uint16_t gpio_pin, uint32_t now_ms);
 
 void aux_rgb_set(uint8_t r, uint8_t g, uint8_t b);
 void aux_beep(uint16_t freq_hz, uint16_t dur_ms);

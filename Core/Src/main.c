@@ -27,6 +27,8 @@
 #include "my_redifine.h"
 #include "usbd_conf.h"
 #include "usbd_core.h"
+#include "usbd_ctap_min.h"
+#include "usbd_fido_class.h"
 #include "aux_inputs.h"
 #include "ext_flash_w25q.h"
 #include "lcd_status.h"
@@ -115,40 +117,82 @@ int main(void)
   while (1)
   {
     static uint32_t last_log_ms = 0;
+    static int32_t last_menu_encoder_position = 0;
     aux_inputs_status_t aux_status;
     ext_flash_info_t flash_info;
+    usbd_ctap_min_ui_status_t fido_ui;
+    uint32_t input_events;
     uint32_t now = HAL_GetTick();
 
-    (void)aux_inputs_poll(now);
+    input_events = aux_inputs_poll(now);
+    if ((input_events & AUX_INPUT_EVENT_BTN_SHORT) != 0u)
+    {
+      usbd_ctap_min_get_ui_status(&fido_ui);
+      if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+      {
+        usbd_ctap_min_note_user_presence();
+      }
+      else
+      {
+        lcd_status_confirm();
+      }
+    }
+    if ((input_events & AUX_INPUT_EVENT_BTN_LONG) != 0u)
+    {
+      lcd_status_back();
+    }
     aux_inputs_get_status(&aux_status);
+    if (lcd_status_is_menu_active() != 0u)
+    {
+      int32_t menu_position = aux_status.encoder_position / 2;
+
+      while (menu_position > last_menu_encoder_position)
+      {
+        lcd_status_next_page();
+        last_menu_encoder_position += 1;
+      }
+      while (menu_position < last_menu_encoder_position)
+      {
+        lcd_status_prev_page();
+        last_menu_encoder_position -= 1;
+      }
+    }
+    else
+    {
+      last_menu_encoder_position = aux_status.encoder_position / 2;
+    }
     ext_flash_get_info(&flash_info);
+    a_usb_diag_capture_registers();
+    usbd_ctap_min_get_ui_status(&fido_ui);
+    USBD_FIDO_Service(&hUsbDeviceHS, now);
+    lcd_status_update((uint8_t)hUsbDeviceHS.dev_state,
+                      (uint8_t)hUsbDeviceHS.dev_config,
+                      g_a_usb_diag_runtime.reset_count,
+                      g_a_usb_diag_runtime.setup_count,
+                      g_a_usb_diag_runtime.data_out_count,
+                      g_a_usb_diag_runtime.data_in_count,
+                      g_a_usb_diag_runtime.suspend_count,
+                      g_a_usb_diag_runtime.cmsis_rx_count,
+                      g_a_usb_diag_runtime.cmsis_tx_count,
+                      g_a_usb_diag_runtime.fido_rx_count,
+                      g_a_usb_diag_runtime.fido_tx_count,
+                      g_a_usb_diag_runtime.fido_last_req_word0,
+                      g_a_usb_diag_runtime.fido_last_rsp_word0,
+                      g_a_usb_diag_runtime.fido_last_status,
+                      fido_ui.ui_state,
+                      fido_ui.pending_cmd,
+                      flash_info.present,
+                      flash_info.jedec_id,
+                      flash_info.capacity_bytes,
+                      flash_info.spi_mode,
+                      aux_status.enc_a,
+                      aux_status.enc_b,
+                      aux_status.enc_btn,
+                      aux_status.encoder_position,
+                      aux_status.last_events);
     if ((now - last_log_ms) >= 1000U)
     {
       last_log_ms = now;
-      a_usb_diag_capture_registers();
-      lcd_status_update((uint8_t)hUsbDeviceHS.dev_state,
-                        (uint8_t)hUsbDeviceHS.dev_config,
-                        g_a_usb_diag_runtime.reset_count,
-                        g_a_usb_diag_runtime.setup_count,
-                        g_a_usb_diag_runtime.data_out_count,
-                        g_a_usb_diag_runtime.data_in_count,
-                        g_a_usb_diag_runtime.suspend_count,
-                        g_a_usb_diag_runtime.cmsis_rx_count,
-                        g_a_usb_diag_runtime.cmsis_tx_count,
-                        g_a_usb_diag_runtime.fido_rx_count,
-                        g_a_usb_diag_runtime.fido_tx_count,
-                        g_a_usb_diag_runtime.fido_last_req_word0,
-                        g_a_usb_diag_runtime.fido_last_rsp_word0,
-                        g_a_usb_diag_runtime.fido_last_status,
-                        flash_info.present,
-                        flash_info.jedec_id,
-                        flash_info.capacity_bytes,
-                        flash_info.spi_mode,
-                        aux_status.enc_a,
-                        aux_status.enc_b,
-                        aux_status.enc_btn,
-                        aux_status.encoder_position,
-                        aux_status.last_events);
       printf("AUSB R=%lu S=%lu O=%lu I=%lu U=%lu C=%lu D=%lu IRQ=%lu AS=%lu OS=%lu LEP=%lu LFS=%lu DS=%u CFG=%lu\r\n",
              g_a_usb_diag_runtime.reset_count,
              g_a_usb_diag_runtime.setup_count,

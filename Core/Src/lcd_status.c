@@ -8,8 +8,7 @@
 #define LCD_TEXT_X 8u
 #define LCD_TEXT_Y0 36u
 #define LCD_TEXT_PITCH 9u
-#define LCD_PAGE_COUNT 4u
-#define LCD_PAGE_HOLD_MS 2000u
+#define LCD_APP_COUNT 4u
 #define LCD_FIDO_RESERVED_BYTES (1024u * 1024u)
 #define TITLE_W 28u
 #define TITLE_H 22u
@@ -32,6 +31,8 @@ static uint32_t s_last_fido_tx_count;
 static uint32_t s_last_fido_last_req_word0;
 static uint32_t s_last_fido_last_rsp_word0;
 static uint32_t s_last_fido_last_status;
+static uint8_t s_last_fido_ui_state;
+static uint8_t s_last_fido_pending_cmd;
 static uint8_t s_last_flash_present;
 static uint32_t s_last_flash_jedec_id;
 static uint32_t s_last_flash_capacity_bytes;
@@ -41,9 +42,10 @@ static uint8_t s_last_enc_b;
 static uint8_t s_last_enc_btn;
 static int32_t s_last_encoder_position;
 static uint32_t s_last_events;
-static uint8_t s_current_page;
+static uint8_t s_menu_active;
+static uint8_t s_menu_index;
+static uint8_t s_active_app;
 static uint8_t s_page_dirty;
-static uint32_t s_next_page_ms;
 
 static const uint8_t k_title_debug[TITLE_H * TITLE_ROW_BYTES] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -189,8 +191,30 @@ static void lcd_draw_shell(const uint8_t *title_bitmap, const char *ascii_title)
     ls013_lcd_hline(8u, 31u, 112u, 1u);
     lcd_draw_bitmap_1bpp(TITLE_X, TITLE_Y, title_bitmap, TITLE_W, TITLE_H);
     lcd_draw_text_line(0u, ascii_title);
-    snprintf(line, sizeof(line), "PAGE %u/%u", (unsigned)(s_current_page + 1u), (unsigned)LCD_PAGE_COUNT);
+    if (s_menu_active != 0u) {
+        snprintf(line, sizeof(line), "MENU %u/%u", (unsigned)(s_menu_index + 1u), (unsigned)LCD_APP_COUNT);
+    } else {
+        snprintf(line, sizeof(line), "APP %u/%u", (unsigned)(s_active_app + 1u), (unsigned)LCD_APP_COUNT);
+    }
     lcd_draw_text_line(11u, line);
+}
+
+static void lcd_draw_menu_page(void) {
+    char line[24];
+
+    lcd_draw_shell(k_title_input, "MENU");
+    lcd_draw_text_line(1u, (s_menu_index == 0u) ? "> USB DEBUG" : "  USB DEBUG");
+    lcd_draw_text_line(2u, (s_menu_index == 1u) ? "> FIDO KEY" : "  FIDO KEY");
+    lcd_draw_text_line(3u, (s_menu_index == 2u) ? "> SPI FLASH" : "  SPI FLASH");
+    lcd_draw_text_line(4u, (s_menu_index == 3u) ? "> INPUTS" : "  INPUTS");
+    snprintf(line, sizeof(line), "POS:%ld", (long)s_last_encoder_position);
+    lcd_draw_text_line(5u, line);
+    snprintf(line, sizeof(line), "A:%u B:%u K:%u", s_last_enc_a, s_last_enc_b, s_last_enc_btn);
+    lcd_draw_text_line(6u, line);
+    snprintf(line, sizeof(line), "EV:%08lX", s_last_events);
+    lcd_draw_text_line(7u, line);
+    lcd_draw_text_line(8u, "SHORT ENTER");
+    lcd_draw_text_line(9u, "LONG BACK");
 }
 
 static void lcd_draw_usb_page(void) {
@@ -214,8 +238,22 @@ static void lcd_draw_usb_page(void) {
 
 static void lcd_draw_security_page(void) {
     char line[24];
+    const char *ui_text = "IDLE";
+    const char *cmd_text = "--";
 
     lcd_draw_shell(k_title_security, "FIDO");
+    switch (s_last_fido_ui_state) {
+        case 1u: ui_text = "WAIT"; break;
+        case 2u: ui_text = "OK"; break;
+        case 3u: ui_text = "DENY"; break;
+        default: ui_text = "IDLE"; break;
+    }
+    switch (s_last_fido_pending_cmd) {
+        case 0x01u: cmd_text = "MC"; break;
+        case 0x02u: cmd_text = "GA"; break;
+        case 0x04u: cmd_text = "GI"; break;
+        default: cmd_text = "--"; break;
+    }
     snprintf(line, sizeof(line), "RX:%lu TX:%lu", s_last_fido_rx_count, s_last_fido_tx_count);
     lcd_draw_text_line(1u, line);
     snprintf(line, sizeof(line), "REQ:%08lX", s_last_fido_last_req_word0);
@@ -224,8 +262,13 @@ static void lcd_draw_security_page(void) {
     lcd_draw_text_line(3u, line);
     snprintf(line, sizeof(line), "STAT:%02lX", s_last_fido_last_status & 0xFFu);
     lcd_draw_text_line(4u, line);
-    lcd_draw_text_line(6u, "CTAP GETINFO");
-    lcd_draw_text_line(7u, "MC/GA WAIT UI");
+    snprintf(line, sizeof(line), "UI:%s CMD:%s", ui_text, cmd_text);
+    lcd_draw_text_line(6u, line);
+    if (s_last_fido_ui_state == 1u) {
+        lcd_draw_text_line(7u, "PRESS KNOB");
+    } else {
+        lcd_draw_text_line(7u, "MC/GA BUTTON");
+    }
 }
 
 static void lcd_draw_flash_page(void) {
@@ -267,7 +310,10 @@ static void lcd_draw_input_page(void) {
 }
 
 static void lcd_redraw_page(void) {
-    switch (s_current_page) {
+    if (s_menu_active != 0u) {
+        lcd_draw_menu_page();
+    } else {
+      switch (s_active_app) {
         case 0u:
             lcd_draw_usb_page();
             break;
@@ -280,8 +326,18 @@ static void lcd_redraw_page(void) {
         default:
             lcd_draw_input_page();
             break;
+      }
     }
     ls013_lcd_send_frame();
+}
+
+static void lcd_status_set_page(uint8_t page) {
+    uint8_t next_page = (uint8_t)(page % LCD_APP_COUNT);
+
+    if (next_page != s_menu_index) {
+        s_menu_index = next_page;
+        s_page_dirty = 1u;
+    }
 }
 
 void lcd_status_init(void) {
@@ -300,6 +356,8 @@ void lcd_status_init(void) {
     s_last_fido_last_req_word0 = 0xFFFFFFFFu;
     s_last_fido_last_rsp_word0 = 0xFFFFFFFFu;
     s_last_fido_last_status = 0xFFFFFFFFu;
+    s_last_fido_ui_state = 0xFFu;
+    s_last_fido_pending_cmd = 0xFFu;
     s_last_flash_present = 0xFFu;
     s_last_flash_jedec_id = 0xFFFFFFFFu;
     s_last_flash_capacity_bytes = 0xFFFFFFFFu;
@@ -309,22 +367,50 @@ void lcd_status_init(void) {
     s_last_enc_btn = 0xFFu;
     s_last_encoder_position = 0x7FFFFFFFu;
     s_last_events = 0xFFFFFFFFu;
-    s_current_page = 0u;
+    s_menu_active = 1u;
+    s_menu_index = 0u;
+    s_active_app = 0u;
     s_page_dirty = 1u;
-    s_next_page_ms = LCD_PAGE_HOLD_MS;
 
     ls013_lcd_init();
     lcd_redraw_page();
 }
 
+uint8_t lcd_status_is_menu_active(void) {
+    return s_menu_active;
+}
+
+void lcd_status_next_page(void) {
+    if (s_menu_active != 0u) {
+        lcd_status_set_page((uint8_t)(s_menu_index + 1u));
+    }
+}
+
+void lcd_status_prev_page(void) {
+    if (s_menu_active != 0u) {
+        lcd_status_set_page((uint8_t)(s_menu_index + LCD_APP_COUNT - 1u));
+    }
+}
+
+void lcd_status_confirm(void) {
+    if (s_menu_active != 0u) {
+        s_active_app = s_menu_index;
+        s_menu_active = 0u;
+        s_page_dirty = 1u;
+    }
+}
+
+void lcd_status_back(void) {
+    if (s_menu_active == 0u) {
+        s_menu_active = 1u;
+        s_menu_index = s_active_app;
+        s_page_dirty = 1u;
+    }
+}
+
 void lcd_status_tick(uint32_t now_ms) {
     if (s_lcd_ready == 0u) {
         return;
-    }
-    if ((int32_t)(now_ms - s_next_page_ms) >= 0) {
-        s_current_page = (uint8_t)((s_current_page + 1u) % LCD_PAGE_COUNT);
-        s_next_page_ms = now_ms + LCD_PAGE_HOLD_MS;
-        s_page_dirty = 1u;
     }
     ls013_lcd_tick(now_ms);
 }
@@ -343,6 +429,8 @@ void lcd_status_update(uint8_t dev_state,
                        uint32_t fido_last_req_word0,
                        uint32_t fido_last_rsp_word0,
                        uint32_t fido_last_status,
+                       uint8_t fido_ui_state,
+                       uint8_t fido_pending_cmd,
                        uint8_t flash_present,
                        uint32_t flash_jedec_id,
                        uint32_t flash_capacity_bytes,
@@ -370,6 +458,8 @@ void lcd_status_update(uint8_t dev_state,
         fido_last_req_word0 == s_last_fido_last_req_word0 &&
         fido_last_rsp_word0 == s_last_fido_last_rsp_word0 &&
         fido_last_status == s_last_fido_last_status &&
+        fido_ui_state == s_last_fido_ui_state &&
+        fido_pending_cmd == s_last_fido_pending_cmd &&
         flash_present == s_last_flash_present &&
         flash_jedec_id == s_last_flash_jedec_id &&
         flash_capacity_bytes == s_last_flash_capacity_bytes &&
@@ -397,6 +487,8 @@ void lcd_status_update(uint8_t dev_state,
     s_last_fido_last_req_word0 = fido_last_req_word0;
     s_last_fido_last_rsp_word0 = fido_last_rsp_word0;
     s_last_fido_last_status = fido_last_status;
+    s_last_fido_ui_state = fido_ui_state;
+    s_last_fido_pending_cmd = fido_pending_cmd;
     s_last_flash_present = flash_present;
     s_last_flash_jedec_id = flash_jedec_id;
     s_last_flash_capacity_bytes = flash_capacity_bytes;
