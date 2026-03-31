@@ -98,6 +98,7 @@ static const uint8_t *font5x7_get(char ch) {
         case '8': { static const uint8_t g[5] = {0x36, 0x49, 0x49, 0x49, 0x36}; return g; }
         case '9': { static const uint8_t g[5] = {0x26, 0x49, 0x49, 0x49, 0x3e}; return g; }
         case '.': { static const uint8_t g[5] = {0x00, 0x60, 0x60, 0x00, 0x00}; return g; }
+        case '#': { static const uint8_t g[5] = {0x14, 0x7f, 0x14, 0x7f, 0x14}; return g; }
         case ':': { static const uint8_t g[5] = {0x00, 0x36, 0x36, 0x00, 0x00}; return g; }
         case '-': { static const uint8_t g[5] = {0x08, 0x08, 0x08, 0x08, 0x08}; return g; }
         case '>': { static const uint8_t g[5] = {0x00, 0x41, 0x22, 0x14, 0x08}; return g; }

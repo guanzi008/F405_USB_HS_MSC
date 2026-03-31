@@ -261,8 +261,8 @@ int main(void)
           {
             lcd_status_set_fido_store_result(2u);
           }
+          HAL_Delay(450u);
           fido_delete_refresh_state();
-          HAL_Delay(180u);
         }
         else
         {
