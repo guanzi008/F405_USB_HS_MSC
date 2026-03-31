@@ -16,10 +16,14 @@ target_include_directories(stm32cubemx INTERFACE
     ../../Core/Inc
     ../../USB_DEVICE/App
     ../../USB_DEVICE/Target
+    ../../USB_DEVICE/CompositeBuilder/Inc
+    ../../user_code/my_public
+    ../../user_code/my_device
     ../../Drivers/STM32F4xx_HAL_Driver/Inc
     ../../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Inc
     ../../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc
+    ../../Middlewares/ST/STM32_USB_Device_Library/Class/HID/Inc
     ../../Drivers/CMSIS/Device/ST/STM32F4xx/Include
     ../../Drivers/CMSIS/Include
 )
@@ -32,12 +36,22 @@ target_sources(stm32cubemx INTERFACE
     ../../Core/Src/sdio.c
     ../../Core/Src/tim.c
     ../../Core/Src/usart.c
+    ../../Core/Src/aux_inputs.c
+    ../../Core/Src/ext_flash_w25q.c
+    ../../Core/Src/ls013_lcd.c
+    ../../Core/Src/lcd_status.c
     ../../Core/Src/stm32f4xx_it.c
     ../../Core/Src/stm32f4xx_hal_msp.c
     ../../USB_DEVICE/App/usb_device.c
     ../../USB_DEVICE/App/usbd_desc.c
+    ../../USB_DEVICE/App/usbd_hid_cmsisdap.c
+    ../../USB_DEVICE/App/usbd_hid_fido.c
+    ../../USB_DEVICE/App/usbd_ctap_min.c
     ../../USB_DEVICE/App/usbd_storage_if.c
     ../../USB_DEVICE/Target/usbd_conf.c
+    ../../USB_DEVICE/CompositeBuilder/Src/usbd_composite_builder.c
+    ../../user_code/my_public/my_redifine.c
+    ../../user_code/my_device/led_and_key.c
     ../../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd.c
     ../../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c
     ../../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usb.c
@@ -66,6 +80,7 @@ target_sources(stm32cubemx INTERFACE
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c
+    ../../Middlewares/ST/STM32_USB_Device_Library/Class/HID/Src/usbd_hid.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Src/usbd_msc.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Src/usbd_msc_bot.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Src/usbd_msc_data.c
@@ -85,5 +100,3 @@ target_link_libraries(stm32cubemx INTERFACE
 if(CMAKE_C_STANDARD LESS 11)
     message(ERROR "Generated code requires C11 or higher")
 endif()
-
-

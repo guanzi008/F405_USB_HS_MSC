@@ -40,6 +40,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f4xx_hal.h"
+#include "usbd_conf.h"
 
 /** @addtogroup STM32F4xx_LL_USB_DRIVER
   * @{
@@ -1350,6 +1351,7 @@ uint32_t USB_GetMode(const USB_OTG_GlobalTypeDef *USBx)
   */
 HAL_StatusTypeDef USB_ActivateSetup(const USB_OTG_GlobalTypeDef *USBx)
 {
+  a_usb_diag_note_activate_setup();
   uint32_t USBx_BASE = (uint32_t)USBx;
 
   /* Set the MPS of the IN EP0 to 64 bytes */
@@ -1372,6 +1374,7 @@ HAL_StatusTypeDef USB_ActivateSetup(const USB_OTG_GlobalTypeDef *USBx)
   */
 HAL_StatusTypeDef USB_EP0_OutStart(const USB_OTG_GlobalTypeDef *USBx, uint8_t dma, const uint8_t *psetup)
 {
+  a_usb_diag_note_ep0_out_start();
   uint32_t USBx_BASE = (uint32_t)USBx;
   uint32_t gSNPSiD = *(__IO const uint32_t *)(&USBx->CID + 0x1U);
 
