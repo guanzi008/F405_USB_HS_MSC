@@ -425,7 +425,7 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
     return 0U;
   }
 
-  if ((state->wait_user_presence == 0U) || (state->tx_active != 0U))
+  if (state->wait_user_presence == 0U)
   {
     return 0U;
   }
@@ -433,6 +433,18 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
   usbd_ctap_min_get_ui_status(&ui);
   if (ui.ui_state == USBD_CTAP_UI_CONFIRMED)
   {
+    if ((state->tx_active != 0U) && (state->tx_cmd == FIDO_HID_CMD_KEEPALIVE))
+    {
+      state->tx_active = 0U;
+      state->tx_len = 0U;
+      state->tx_offset = 0U;
+      state->tx_seq = 0U;
+    }
+    else if (state->tx_active != 0U)
+    {
+      return 0U;
+    }
+
     if (usbd_ctap_min_complete_pending(state->rx_buf,
                                        state->pending_cbor_len,
                                        1U,
@@ -452,6 +464,18 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
   }
   else if (ui.ui_state == USBD_CTAP_UI_DENIED)
   {
+    if ((state->tx_active != 0U) && (state->tx_cmd == FIDO_HID_CMD_KEEPALIVE))
+    {
+      state->tx_active = 0U;
+      state->tx_len = 0U;
+      state->tx_offset = 0U;
+      state->tx_seq = 0U;
+    }
+    else if (state->tx_active != 0U)
+    {
+      return 0U;
+    }
+
     if (usbd_ctap_min_complete_pending(state->rx_buf,
                                        state->pending_cbor_len,
                                        0U,
@@ -468,6 +492,10 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
     state->wait_user_presence = 0U;
     state->pending_req_valid = 0U;
     state->pending_cbor_len = 0U;
+  }
+  else if (state->tx_active != 0U)
+  {
+    return 0U;
   }
   else if ((uint32_t)(now_ms - state->last_keepalive_ms) >= 250U)
   {

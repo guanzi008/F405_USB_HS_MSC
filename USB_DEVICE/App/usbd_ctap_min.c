@@ -15,6 +15,7 @@
 #define CTAP_GA_KEY_RP_ID            0x01U
 #define CTAP_GA_KEY_CLIENT_DATA_HASH 0x02U
 #define CTAP_GA_KEY_ALLOW_LIST       0x03U
+#define CTAP_GA_KEY_OPTIONS          0x05U
 #define CTAP_GA_ALLOW_LIST_MAX       64U
 #define CTAP_RECENT_APPROVAL_WINDOW_MS 15000U
 
@@ -56,6 +57,8 @@ typedef struct
   uint16_t allow_credential_id_lens[CTAP_GA_ALLOW_LIST_MAX];
   uint8_t allow_credential_count;
   uint16_t allow_credential_total;
+  uint8_t option_up_present;
+  uint8_t option_up;
   uint8_t has_client_data_hash;
   uint8_t has_rp_id;
 } ctap_get_assertion_req_t;
@@ -410,6 +413,29 @@ static uint8_t cbor_read_text(cbor_reader_t *reader, cbor_span_t *span)
   span->len = (uint16_t)len;
   reader->off = (uint16_t)(reader->off + len);
   return 1U;
+}
+
+static uint8_t cbor_read_bool(cbor_reader_t *reader, uint8_t *value)
+{
+  if ((reader == NULL) || (value == NULL) || (reader->off >= reader->len))
+  {
+    return 0U;
+  }
+
+  if (reader->buf[reader->off] == 0xF4U)
+  {
+    *value = 0U;
+    reader->off = (uint16_t)(reader->off + 1U);
+    return 1U;
+  }
+  if (reader->buf[reader->off] == 0xF5U)
+  {
+    *value = 1U;
+    reader->off = (uint16_t)(reader->off + 1U);
+    return 1U;
+  }
+
+  return 0U;
 }
 
 static uint8_t cbor_enter_map(cbor_reader_t *reader, uint32_t *pair_count)
@@ -927,6 +953,39 @@ static uint8_t parse_get_assertion(const uint8_t *req,
         }
         break;
 
+      case CTAP_GA_KEY_OPTIONS:
+      {
+        uint32_t opt_count;
+        uint32_t opt_index;
+
+        if (cbor_enter_map(&reader, &opt_count) == 0U)
+        {
+          return 0U;
+        }
+
+        for (opt_index = 0U; opt_index < opt_count; ++opt_index)
+        {
+          cbor_span_t name;
+          uint8_t value_bool;
+
+          if (cbor_read_text(&reader, &name) == 0U)
+          {
+            return 0U;
+          }
+          if (cbor_read_bool(&reader, &value_bool) == 0U)
+          {
+            return 0U;
+          }
+
+          if (cbor_text_eq(&name, "up") != 0U)
+          {
+            parsed->option_up_present = 1U;
+            parsed->option_up = value_bool;
+          }
+        }
+        break;
+      }
+
       default:
         if (cbor_skip_item(&reader) == 0U)
         {
@@ -1240,6 +1299,7 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
                                             fido_store_credential_t *credential,
                                             uint32_t slot_index,
                                             const uint8_t client_data_hash[FIDO_SHA256_SIZE],
+                                            uint8_t user_present,
                                             uint8_t *resp,
                                             uint16_t resp_cap,
                                             uint16_t *resp_len)
@@ -1256,11 +1316,10 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   {
     return 0U;
   }
-  (void)slot_index;
 
   memcpy(&auth_data[0], rp_id_hash, FIDO_SHA256_SIZE);
-  auth_data[32] = CTAP_FLAG_USER_PRESENT;
-  next_sign_count = credential->sign_count + 1U;
+  auth_data[32] = (uint8_t)((user_present != 0U) ? CTAP_FLAG_USER_PRESENT : 0U);
+  next_sign_count = credential->sign_count + ((user_present != 0U) ? 1U : 0U);
   store_be32(&auth_data[33], next_sign_count);
   include_user = (uint8_t)((credential->user_id_len != 0U) ||
                            (credential->user_name[0] != '\0') ||
@@ -1337,6 +1396,11 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
     {
       return 0U;
     }
+  }
+
+  if (user_present != 0U)
+  {
+    (void)fido_store_update_sign_count(slot_index, next_sign_count);
   }
 
   *resp_len = off;
@@ -1461,6 +1525,37 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
     s_ctap_ui_state = USBD_CTAP_UI_IDLE;
     s_ctap_pending_cmd = 0U;
     return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+  }
+
+  if ((parsed.option_up_present != 0U) && (parsed.option_up == 0U))
+  {
+    fido_store_credential_t credential;
+    uint32_t slot_index = 0U;
+
+    if ((s_ctap_selection_count == 0U) || (s_ctap_selection_index >= s_ctap_selection_count))
+    {
+      return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+    }
+
+    credential = s_ctap_candidates[s_ctap_selection_index];
+    slot_index = s_ctap_candidate_slots[s_ctap_selection_index];
+    s_ctap_ui_state = USBD_CTAP_UI_IDLE;
+    s_ctap_pending_cmd = 0U;
+    s_ctap_selection_count = 0U;
+    s_ctap_selection_index = 0U;
+    if (build_get_assertion_response(rp_id_hash,
+                                     &credential,
+                                     slot_index,
+                                     parsed.client_data_hash,
+                                     0U,
+                                     resp,
+                                     resp_cap,
+                                     resp_len) == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+    }
+    ctap_diag_note_status(CTAP_STATUS_OK);
+    return USBD_CTAP_MIN_DONE;
   }
 
   s_ctap_pending_cmd = CTAP_CMD_GET_ASSERTION;
@@ -1624,6 +1719,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                      &credential,
                                      slot_index,
                                      parsed.client_data_hash,
+                                     1U,
                                      resp,
                                      resp_cap,
                                      resp_len) == 0U)

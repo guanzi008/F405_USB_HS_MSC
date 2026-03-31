@@ -25,6 +25,9 @@ typedef struct
   char user_display_name[64];
 } fido_store_slot_t;
 
+static uint32_t s_runtime_sign_count[FIDO_STORE_CREDENTIALS_MAX];
+static uint8_t s_runtime_sign_count_valid[FIDO_STORE_CREDENTIALS_MAX];
+
 static uint32_t fido_store_base_address(void)
 {
   uint32_t capacity = ext_flash_get_capacity_bytes();
@@ -71,7 +74,9 @@ static uint8_t fido_store_slot_valid(const fido_store_slot_t *slot)
                    (slot->credential_id_len <= FIDO_CREDENTIAL_ID_SIZE));
 }
 
-static void fido_store_copy_out(const fido_store_slot_t *slot, fido_store_credential_t *credential)
+static void fido_store_copy_out(uint32_t slot_index,
+                                const fido_store_slot_t *slot,
+                                fido_store_credential_t *credential)
 {
   memset(credential, 0, sizeof(*credential));
   credential->counter = slot->counter;
@@ -92,6 +97,13 @@ static void fido_store_copy_out(const fido_store_slot_t *slot, fido_store_creden
     credential->user_name[sizeof(credential->user_name) - 1U] = '\0';
     memcpy(credential->user_display_name, slot->user_display_name, sizeof(credential->user_display_name));
     credential->user_display_name[sizeof(credential->user_display_name) - 1U] = '\0';
+  }
+
+  if ((slot_index < FIDO_STORE_CREDENTIALS_MAX) &&
+      (s_runtime_sign_count_valid[slot_index] != 0U) &&
+      (s_runtime_sign_count[slot_index] > credential->sign_count))
+  {
+    credential->sign_count = s_runtime_sign_count[slot_index];
   }
 }
 
@@ -188,7 +200,9 @@ uint8_t fido_store_register(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
     return 0U;
   }
 
-  fido_store_copy_out(&slot, credential);
+  s_runtime_sign_count_valid[free_slot] = 1U;
+  s_runtime_sign_count[free_slot] = slot.sign_count;
+  fido_store_copy_out(free_slot, &slot, credential);
   return 1U;
 }
 
@@ -229,7 +243,7 @@ uint8_t fido_store_find(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
       }
     }
 
-    fido_store_copy_out(&slot, credential);
+    fido_store_copy_out(i, &slot, credential);
     if (slot_index != NULL)
     {
       *slot_index = i;
@@ -253,25 +267,23 @@ uint8_t fido_store_get_by_index(uint32_t slot_index, fido_store_credential_t *cr
     return 0U;
   }
 
-  fido_store_copy_out(&slot, credential);
+  fido_store_copy_out(slot_index, &slot, credential);
   return 1U;
 }
 
 uint8_t fido_store_update_sign_count(uint32_t slot_index, uint32_t sign_count)
 {
-  fido_store_slot_t slot;
-
-  if ((fido_store_is_ready() == 0U) || (fido_store_read_slot(slot_index, &slot) == 0U))
-  {
-    return 0U;
-  }
-  if (fido_store_slot_valid(&slot) == 0U)
+  if ((fido_store_is_ready() == 0U) || (slot_index >= FIDO_STORE_CREDENTIALS_MAX))
   {
     return 0U;
   }
 
-  slot.sign_count = sign_count;
-  return fido_store_write_slot(slot_index, &slot);
+  s_runtime_sign_count_valid[slot_index] = 1U;
+  if (sign_count > s_runtime_sign_count[slot_index])
+  {
+    s_runtime_sign_count[slot_index] = sign_count;
+  }
+  return 1U;
 }
 
 uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, void *ctx)
@@ -285,6 +297,8 @@ uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, voi
   }
 
   memset(blank, 0xFF, sizeof(blank));
+  memset(s_runtime_sign_count, 0, sizeof(s_runtime_sign_count));
+  memset(s_runtime_sign_count_valid, 0, sizeof(s_runtime_sign_count_valid));
 
   for (slot_index = 0U; slot_index < FIDO_STORE_CREDENTIALS_MAX; ++slot_index)
   {
