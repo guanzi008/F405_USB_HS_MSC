@@ -40,6 +40,11 @@ uint8_t fido_store_find(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                         fido_store_credential_t *credential,
                         uint32_t *slot_index);
 uint8_t fido_store_get_by_index(uint32_t slot_index, fido_store_credential_t *credential);
+uint16_t fido_store_count(void);
+uint8_t fido_store_get_nth(uint16_t ordinal,
+                           fido_store_credential_t *credential,
+                           uint32_t *slot_index);
+uint8_t fido_store_delete(uint32_t slot_index);
 uint8_t fido_store_update_sign_count(uint32_t slot_index, uint32_t sign_count);
 uint8_t fido_store_clear(void);
 uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, void *ctx);

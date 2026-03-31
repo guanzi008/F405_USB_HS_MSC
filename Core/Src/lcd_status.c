@@ -11,9 +11,9 @@
 #define LCD_TEXT_Y0 42u
 #define LCD_TEXT_PITCH 12u
 #define LCD_TEXT_CLEAR_H 10u
-#define LCD_MENU_Y0 38u
-#define LCD_MENU_PITCH 16u
-#define LCD_APP_COUNT 5u
+#define LCD_MENU_Y0 34u
+#define LCD_MENU_PITCH 14u
+#define LCD_APP_COUNT 6u
 #define LCD_FIDO_RESERVED_BYTES (1024u * 1024u)
 
 static uint8_t s_lcd_ready;
@@ -52,6 +52,9 @@ static uint8_t s_page_dirty;
 static uint8_t s_last_fido_store_result;
 static uint8_t s_fido_wipe_active;
 static uint8_t s_fido_wipe_progress;
+static uint16_t s_last_fido_delete_count;
+static uint16_t s_last_fido_delete_index;
+static char s_last_fido_delete_name[32];
 
 static const uint8_t *font5x7_get(char ch) {
     static const uint8_t blank[5] = {0, 0, 0, 0, 0};
@@ -299,6 +302,7 @@ static void lcd_draw_menu_page(void) {
     lcd_draw_menu_item(2u, s_menu_index == 2u, LCD_ZH_MENU_SPI_FLASH);
     lcd_draw_menu_item(3u, s_menu_index == 3u, LCD_ZH_MENU_INPUT_DEV);
     lcd_draw_menu_item(4u, s_menu_index == 4u, LCD_ZH_MENU_WIPE_KEY);
+    lcd_draw_menu_item(5u, s_menu_index == 5u, LCD_ZH_MENU_DELETE_KEY);
 }
 
 static void lcd_draw_usb_page(void) {
@@ -417,6 +421,42 @@ static void lcd_draw_fido_wipe_page(void) {
     lcd_draw_zh_at(LCD_TEXT_X, 112u, 108u, LCD_ZH_REREGISTER);
 }
 
+static void lcd_draw_fido_delete_page(void) {
+    char line[24];
+
+    lcd_draw_shell(LCD_ZH_DELETE);
+    if (s_last_fido_delete_count == 0u) {
+        if (s_last_fido_store_result == 1u) {
+            lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_DONE);
+        } else if (s_last_fido_store_result == 2u) {
+            lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_DELETE_FAIL);
+        } else {
+            lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_NO_KEY);
+        }
+        lcd_draw_zh_at(LCD_TEXT_X, 68u, 112u, LCD_ZH_LONG_BACK);
+        lcd_draw_zh_at(LCD_TEXT_X, 86u, 112u, LCD_ZH_REREGISTER);
+        return;
+    }
+
+    lcd_draw_zh_at(LCD_TEXT_X, 46u, 28u, LCD_ZH_ACCOUNT);
+    snprintf(line, sizeof(line), "%u/%u",
+             (unsigned)(s_last_fido_delete_index + 1u),
+             (unsigned)s_last_fido_delete_count);
+    lcd_draw_text_at(48u, 49u, 40u, line);
+    lcd_draw_text_at(LCD_TEXT_X, 66u, 108u,
+                     s_last_fido_delete_name[0] != '\0' ? s_last_fido_delete_name : "USER");
+    lcd_draw_zh_at(LCD_TEXT_X, 84u, 112u, LCD_ZH_KNOB_SELECT);
+
+    if (s_last_fido_store_result == 1u) {
+        lcd_draw_zh_at(LCD_TEXT_X, 102u, 112u, LCD_ZH_DONE);
+    } else if (s_last_fido_store_result == 2u) {
+        lcd_draw_zh_at(LCD_TEXT_X, 102u, 112u, LCD_ZH_DELETE_FAIL);
+    } else {
+        lcd_draw_zh_at(LCD_TEXT_X, 100u, 112u, LCD_ZH_SHORT_DELETE);
+        lcd_draw_zh_at(LCD_TEXT_X, 114u, 112u, LCD_ZH_LONG_BACK);
+    }
+}
+
 static void lcd_draw_fido_popup(void)
 {
     lcd_zh_id_t cmd_text = LCD_ZH_GET_INFO;
@@ -454,17 +494,20 @@ static void lcd_redraw_page(void) {
         lcd_draw_menu_page();
     } else {
       switch (s_active_app) {
-        case 0u:
+        case LCD_STATUS_APP_USB_DEBUG:
             lcd_draw_usb_page();
             break;
-        case 1u:
+        case LCD_STATUS_APP_SECURITY:
             lcd_draw_security_page();
             break;
-        case 2u:
+        case LCD_STATUS_APP_FLASH:
             lcd_draw_flash_page();
             break;
-        case 4u:
+        case LCD_STATUS_APP_WIPE:
             lcd_draw_fido_wipe_page();
+            break;
+        case LCD_STATUS_APP_DELETE_KEY:
+            lcd_draw_fido_delete_page();
             break;
         default:
             lcd_draw_input_page();
@@ -523,6 +566,9 @@ void lcd_status_init(void) {
     s_last_fido_store_result = 0u;
     s_fido_wipe_active = 0u;
     s_fido_wipe_progress = 0u;
+    s_last_fido_delete_count = 0xFFFFu;
+    s_last_fido_delete_index = 0xFFFFu;
+    memset(s_last_fido_delete_name, 0, sizeof(s_last_fido_delete_name));
 
     ls013_lcd_init();
     lcd_redraw_page();
@@ -548,6 +594,7 @@ void lcd_status_confirm(void) {
     if (s_menu_active != 0u) {
         s_active_app = s_menu_index;
         s_menu_active = 0u;
+        s_last_fido_store_result = 0u;
         s_page_dirty = 1u;
     }
 }
@@ -579,6 +626,20 @@ void lcd_status_set_fido_store_progress(uint8_t active, uint8_t progress) {
         if (s_lcd_ready != 0u) {
             lcd_redraw_page();
         }
+    }
+}
+
+void lcd_status_set_fido_delete_state(uint16_t count, uint16_t index, const char *name) {
+    if ((s_last_fido_delete_count != count) ||
+        (s_last_fido_delete_index != index) ||
+        (strcmp((name != NULL) ? name : "", s_last_fido_delete_name) != 0)) {
+        s_last_fido_delete_count = count;
+        s_last_fido_delete_index = index;
+        memset(s_last_fido_delete_name, 0, sizeof(s_last_fido_delete_name));
+        if (name != NULL) {
+            strncpy(s_last_fido_delete_name, name, sizeof(s_last_fido_delete_name) - 1u);
+        }
+        s_page_dirty = 1u;
     }
 }
 

@@ -27,6 +27,7 @@ typedef struct
 
 static uint32_t s_runtime_sign_count[FIDO_STORE_CREDENTIALS_MAX];
 static uint8_t s_runtime_sign_count_valid[FIDO_STORE_CREDENTIALS_MAX];
+static uint8_t s_blank_slot[FIDO_STORE_SLOT_SIZE];
 
 static uint32_t fido_store_base_address(void)
 {
@@ -268,6 +269,88 @@ uint8_t fido_store_get_by_index(uint32_t slot_index, fido_store_credential_t *cr
   }
 
   fido_store_copy_out(slot_index, &slot, credential);
+  return 1U;
+}
+
+uint16_t fido_store_count(void)
+{
+  fido_store_slot_t slot;
+  uint32_t i;
+  uint16_t count = 0U;
+
+  if (fido_store_is_ready() == 0U)
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < FIDO_STORE_CREDENTIALS_MAX; ++i)
+  {
+    if (fido_store_read_slot(i, &slot) == 0U)
+    {
+      return count;
+    }
+    if (fido_store_slot_valid(&slot) != 0U)
+    {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+uint8_t fido_store_get_nth(uint16_t ordinal,
+                           fido_store_credential_t *credential,
+                           uint32_t *slot_index)
+{
+  fido_store_slot_t slot;
+  uint32_t i;
+  uint16_t count = 0U;
+
+  if ((credential == NULL) || (fido_store_is_ready() == 0U))
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < FIDO_STORE_CREDENTIALS_MAX; ++i)
+  {
+    if (fido_store_read_slot(i, &slot) == 0U)
+    {
+      return 0U;
+    }
+    if (fido_store_slot_valid(&slot) == 0U)
+    {
+      continue;
+    }
+    if (count == ordinal)
+    {
+      fido_store_copy_out(i, &slot, credential);
+      if (slot_index != NULL)
+      {
+        *slot_index = i;
+      }
+      return 1U;
+    }
+    count++;
+  }
+
+  return 0U;
+}
+
+uint8_t fido_store_delete(uint32_t slot_index)
+{
+  if ((fido_store_is_ready() == 0U) || (slot_index >= FIDO_STORE_CREDENTIALS_MAX))
+  {
+    return 0U;
+  }
+
+  memset(s_blank_slot, 0xFF, sizeof(s_blank_slot));
+  if (ext_flash_write(fido_store_slot_address(slot_index), s_blank_slot, sizeof(s_blank_slot)) == 0U)
+  {
+    return 0U;
+  }
+
+  s_runtime_sign_count_valid[slot_index] = 0U;
+  s_runtime_sign_count[slot_index] = 0U;
   return 1U;
 }
 

@@ -3,6 +3,13 @@
 
 #include <stdint.h>
 
+#define LCD_STATUS_APP_USB_DEBUG   0u
+#define LCD_STATUS_APP_SECURITY    1u
+#define LCD_STATUS_APP_FLASH       2u
+#define LCD_STATUS_APP_INPUT       3u
+#define LCD_STATUS_APP_WIPE        4u
+#define LCD_STATUS_APP_DELETE_KEY  5u
+
 void lcd_status_init(void);
 uint8_t lcd_status_is_menu_active(void);
 void lcd_status_next_page(void);
@@ -12,6 +19,7 @@ void lcd_status_back(void);
 uint8_t lcd_status_get_active_app(void);
 void lcd_status_set_fido_store_result(uint8_t result);
 void lcd_status_set_fido_store_progress(uint8_t active, uint8_t progress);
+void lcd_status_set_fido_delete_state(uint16_t count, uint16_t index, const char *name);
 void lcd_status_tick(uint32_t now_ms);
 void lcd_status_update(uint8_t dev_state,
                        uint8_t dev_config,

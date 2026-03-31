@@ -33,6 +33,7 @@
 #include "aux_inputs.h"
 #include "ext_flash_w25q.h"
 #include "lcd_status.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,6 +76,51 @@ static void fido_wipe_progress_cb(uint16_t current, uint16_t total, void *ctx)
     progress = (uint8_t)((current * 100u) / total);
   }
   lcd_status_set_fido_store_progress((uint8_t)(current < total), progress);
+}
+
+static uint16_t s_delete_selection_index = 0u;
+static uint16_t s_delete_selection_count = 0u;
+static uint32_t s_delete_slot_index = 0xFFFFFFFFu;
+static char s_delete_selection_name[32];
+
+static void fido_delete_refresh_state(void)
+{
+  fido_store_credential_t credential;
+
+  memset(s_delete_selection_name, 0, sizeof(s_delete_selection_name));
+  s_delete_slot_index = 0xFFFFFFFFu;
+  s_delete_selection_count = fido_store_count();
+
+  if (s_delete_selection_count == 0u)
+  {
+    s_delete_selection_index = 0u;
+    lcd_status_set_fido_delete_state(0u, 0u, "");
+    return;
+  }
+
+  if (s_delete_selection_index >= s_delete_selection_count)
+  {
+    s_delete_selection_index = (uint16_t)(s_delete_selection_count - 1u);
+  }
+
+  if (fido_store_get_nth(s_delete_selection_index, &credential, &s_delete_slot_index) != 0u)
+  {
+    const char *name = credential.user_display_name;
+
+    if ((name == NULL) || (name[0] == '\0'))
+    {
+      name = credential.user_name;
+    }
+    if ((name == NULL) || (name[0] == '\0'))
+    {
+      name = "USER";
+    }
+    strncpy(s_delete_selection_name, name, sizeof(s_delete_selection_name) - 1u);
+  }
+
+  lcd_status_set_fido_delete_state(s_delete_selection_count,
+                                   s_delete_selection_index,
+                                   s_delete_selection_name);
 }
 
 /* USER CODE END 0 */
@@ -157,12 +203,21 @@ int main(void)
       {
         usbd_ctap_min_note_user_presence();
       }
-      else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == 4u))
+      else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == LCD_STATUS_APP_WIPE))
       {
         lcd_status_set_fido_store_result(0u);
         lcd_status_set_fido_store_progress(1u, 0u);
         lcd_status_set_fido_store_result((uint8_t)(fido_store_clear_with_progress(fido_wipe_progress_cb, NULL) != 0u ? 1u : 2u));
         lcd_status_set_fido_store_progress(0u, 100u);
+      }
+      else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == LCD_STATUS_APP_DELETE_KEY))
+      {
+        lcd_status_set_fido_store_result(0u);
+        if ((s_delete_selection_count != 0u) && (s_delete_slot_index != 0xFFFFFFFFu))
+        {
+          lcd_status_set_fido_store_result((uint8_t)(fido_store_delete(s_delete_slot_index) != 0u ? 1u : 2u));
+          fido_delete_refresh_state();
+        }
       }
       else
       {
@@ -199,6 +254,34 @@ int main(void)
         last_menu_encoder_position -= 1;
       }
       usbd_ctap_min_get_ui_status(&fido_ui);
+    }
+    else if ((lcd_status_is_menu_active() == 0u) &&
+             (lcd_status_get_active_app() == LCD_STATUS_APP_DELETE_KEY))
+    {
+      int32_t delete_position = aux_status.encoder_position / 2;
+
+      fido_delete_refresh_state();
+      while (delete_position > last_menu_encoder_position)
+      {
+        if ((s_delete_selection_count != 0u) &&
+            ((uint16_t)(s_delete_selection_index + 1u) < s_delete_selection_count))
+        {
+          s_delete_selection_index++;
+          lcd_status_set_fido_store_result(0u);
+          fido_delete_refresh_state();
+        }
+        last_menu_encoder_position += 1;
+      }
+      while (delete_position < last_menu_encoder_position)
+      {
+        if ((s_delete_selection_count != 0u) && (s_delete_selection_index > 0u))
+        {
+          s_delete_selection_index--;
+          lcd_status_set_fido_store_result(0u);
+          fido_delete_refresh_state();
+        }
+        last_menu_encoder_position -= 1;
+      }
     }
     else if (lcd_status_is_menu_active() != 0u)
     {
