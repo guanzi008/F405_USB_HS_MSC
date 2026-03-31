@@ -338,12 +338,27 @@ uint8_t fido_store_get_nth(uint16_t ordinal,
 
 uint8_t fido_store_delete(uint32_t slot_index)
 {
+  return fido_store_delete_with_progress(slot_index, NULL, NULL);
+}
+
+uint8_t fido_store_delete_with_progress(uint32_t slot_index,
+                                        fido_store_progress_cb_t progress_cb,
+                                        void *ctx)
+{
   if ((fido_store_is_ready() == 0U) || (slot_index >= FIDO_STORE_CREDENTIALS_MAX))
   {
     return 0U;
   }
 
+  if (progress_cb != NULL)
+  {
+    progress_cb(0U, 100U, ctx);
+  }
   memset(s_blank_slot, 0xFF, sizeof(s_blank_slot));
+  if (progress_cb != NULL)
+  {
+    progress_cb(15U, 100U, ctx);
+  }
   if (ext_flash_write(fido_store_slot_address(slot_index), s_blank_slot, sizeof(s_blank_slot)) == 0U)
   {
     return 0U;
@@ -351,6 +366,10 @@ uint8_t fido_store_delete(uint32_t slot_index)
 
   s_runtime_sign_count_valid[slot_index] = 0U;
   s_runtime_sign_count[slot_index] = 0U;
+  if (progress_cb != NULL)
+  {
+    progress_cb(100U, 100U, ctx);
+  }
   return 1U;
 }
 

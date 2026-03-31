@@ -78,6 +78,18 @@ static void fido_wipe_progress_cb(uint16_t current, uint16_t total, void *ctx)
   lcd_status_set_fido_store_progress((uint8_t)(current < total), progress);
 }
 
+static void fido_delete_progress_cb(uint16_t current, uint16_t total, void *ctx)
+{
+  uint8_t progress = 0u;
+
+  (void)ctx;
+  if (total != 0u)
+  {
+    progress = (uint8_t)((current * 100u) / total);
+  }
+  lcd_status_set_fido_delete_progress((uint8_t)(current < total), progress);
+}
+
 static uint16_t s_delete_selection_index = 0u;
 static uint16_t s_delete_selection_count = 0u;
 static uint32_t s_delete_slot_index = 0xFFFFFFFFu;
@@ -215,7 +227,12 @@ int main(void)
         lcd_status_set_fido_store_result(0u);
         if ((s_delete_selection_count != 0u) && (s_delete_slot_index != 0xFFFFFFFFu))
         {
-          lcd_status_set_fido_store_result((uint8_t)(fido_store_delete(s_delete_slot_index) != 0u ? 1u : 2u));
+          lcd_status_set_fido_delete_progress(1u, 0u);
+          HAL_Delay(30u);
+          lcd_status_set_fido_store_result((uint8_t)(fido_store_delete_with_progress(s_delete_slot_index,
+                                                                                     fido_delete_progress_cb,
+                                                                                     NULL) != 0u ? 1u : 2u));
+          lcd_status_set_fido_delete_progress(0u, 100u);
           fido_delete_refresh_state();
         }
       }

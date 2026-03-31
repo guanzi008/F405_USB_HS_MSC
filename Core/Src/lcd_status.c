@@ -52,6 +52,8 @@ static uint8_t s_page_dirty;
 static uint8_t s_last_fido_store_result;
 static uint8_t s_fido_wipe_active;
 static uint8_t s_fido_wipe_progress;
+static uint8_t s_fido_delete_active;
+static uint8_t s_fido_delete_progress;
 static uint16_t s_last_fido_delete_count;
 static uint16_t s_last_fido_delete_index;
 static char s_last_fido_delete_name[32];
@@ -407,15 +409,13 @@ static void lcd_draw_fido_wipe_page(void) {
         snprintf(line, sizeof(line), "ERASE %u%%", (unsigned)s_fido_wipe_progress);
         lcd_draw_text_line(4u, line);
         lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_PLEASE_WAIT);
-    } else {
-        lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_SHORT_ERASE);
-        lcd_draw_zh_at(LCD_TEXT_X, 68u, 112u, LCD_ZH_LONG_BACK);
-    }
-    if (s_last_fido_store_result == 1u) {
+    } else if (s_last_fido_store_result == 1u) {
         lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_DONE);
     } else if (s_last_fido_store_result == 2u) {
         lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_ERASE_FAIL);
     } else {
+        lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_SHORT_ERASE);
+        lcd_draw_zh_at(LCD_TEXT_X, 68u, 112u, LCD_ZH_LONG_BACK);
         lcd_draw_text_line(5u, "READY");
     }
     lcd_draw_zh_at(LCD_TEXT_X, 112u, 108u, LCD_ZH_REREGISTER);
@@ -425,6 +425,17 @@ static void lcd_draw_fido_delete_page(void) {
     char line[24];
 
     lcd_draw_shell(LCD_ZH_DELETE);
+    if (s_fido_delete_active != 0u) {
+        lcd_draw_zh_at(LCD_TEXT_X, 48u, 112u, LCD_ZH_ACCOUNT);
+        lcd_draw_text_at(48u, 51u, 60u,
+                         s_last_fido_delete_name[0] != '\0' ? s_last_fido_delete_name : "USER");
+        lcd_draw_progress_bar(LCD_TEXT_X, 68u, 96u, 10u, s_fido_delete_progress);
+        snprintf(line, sizeof(line), "DELETE %u%%", (unsigned)s_fido_delete_progress);
+        lcd_draw_text_line(4u, line);
+        lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_PLEASE_WAIT);
+        return;
+    }
+
     if (s_last_fido_delete_count == 0u) {
         if (s_last_fido_store_result == 1u) {
             lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_DONE);
@@ -566,6 +577,8 @@ void lcd_status_init(void) {
     s_last_fido_store_result = 0u;
     s_fido_wipe_active = 0u;
     s_fido_wipe_progress = 0u;
+    s_fido_delete_active = 0u;
+    s_fido_delete_progress = 0u;
     s_last_fido_delete_count = 0xFFFFu;
     s_last_fido_delete_index = 0xFFFFu;
     memset(s_last_fido_delete_name, 0, sizeof(s_last_fido_delete_name));
@@ -622,6 +635,17 @@ void lcd_status_set_fido_store_progress(uint8_t active, uint8_t progress) {
     if ((s_fido_wipe_active != active) || (s_fido_wipe_progress != progress)) {
         s_fido_wipe_active = active;
         s_fido_wipe_progress = progress;
+        s_page_dirty = 1u;
+        if (s_lcd_ready != 0u) {
+            lcd_redraw_page();
+        }
+    }
+}
+
+void lcd_status_set_fido_delete_progress(uint8_t active, uint8_t progress) {
+    if ((s_fido_delete_active != active) || (s_fido_delete_progress != progress)) {
+        s_fido_delete_active = active;
+        s_fido_delete_progress = progress;
         s_page_dirty = 1u;
         if (s_lcd_ready != 0u) {
             lcd_redraw_page();
