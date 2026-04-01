@@ -244,7 +244,6 @@ int main(void)
           HAL_Delay(120u);
           count_after = fido_store_count();
           slot_still_valid = fido_store_get_by_index(s_delete_slot_index, &verify_credential);
-          lcd_status_set_fido_delete_progress(0u, 100u);
           printf("ADEL SLOT=%lu BEFORE=%u AFTER=%u OK=%u VALID=%u\r\n",
                  (unsigned long)s_delete_slot_index,
                  (unsigned)count_before,
@@ -261,6 +260,7 @@ int main(void)
           {
             lcd_status_set_fido_store_result(2u);
           }
+          lcd_status_set_fido_delete_progress(0u, 100u);
           HAL_Delay(450u);
           fido_delete_refresh_state();
         }
