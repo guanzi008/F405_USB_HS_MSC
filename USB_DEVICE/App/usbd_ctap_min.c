@@ -80,7 +80,15 @@
 #define CTAP_CONFIG_PARAM_MIN_PIN_RPIDS     0x02U
 #define CTAP_CONFIG_PARAM_FORCE_CHANGE_PIN  0x03U
 
+#define CTAP_LARGEBLOBS_KEY_GET            0x01U
+#define CTAP_LARGEBLOBS_KEY_SET            0x02U
+#define CTAP_LARGEBLOBS_KEY_OFFSET         0x03U
+#define CTAP_LARGEBLOBS_KEY_LENGTH         0x04U
+#define CTAP_LARGEBLOBS_KEY_PIN_AUTH       0x05U
+#define CTAP_LARGEBLOBS_KEY_PIN_PROTOCOL   0x06U
+
 #define CTAP_FLAG_USER_PRESENT 0x01U
+#define CTAP_FLAG_USER_VERIFIED 0x04U
 #define CTAP_FLAG_ATTESTED     0x40U
 #define CTAP_FLAG_EXTENSION_DATA 0x80U
 
@@ -222,6 +230,22 @@ typedef struct
   cbor_span_t subcmd_params;
 } ctap_config_req_t;
 
+typedef struct
+{
+  uint8_t has_get;
+  uint8_t has_set;
+  uint8_t has_offset;
+  uint8_t has_length;
+  uint8_t has_pin_auth;
+  uint8_t has_pin_protocol;
+  uint16_t get_len;
+  cbor_span_t set_data;
+  uint16_t offset;
+  uint16_t total_length;
+  uint8_t pin_auth[16];
+  uint8_t pin_protocol;
+} ctap_large_blobs_req_t;
+
 static uint8_t s_ctap_user_presence_latched;
 static uint8_t s_ctap_pending_cmd;
 static uint8_t s_ctap_ui_state;
@@ -247,6 +271,10 @@ static uint16_t s_ctap_credman_rp_cursor;
 static uint16_t s_ctap_credman_rp_total;
 static uint16_t s_ctap_credman_rk_cursor;
 static uint16_t s_ctap_credman_rk_total;
+static uint8_t s_ctap_largeblob_write_active;
+static uint16_t s_ctap_largeblob_write_expected_len;
+static uint16_t s_ctap_largeblob_write_received_len;
+static uint8_t s_ctap_largeblob_write_buf[FIDO_STORE_LARGEBLOB_MAX];
 
 static uint8_t parse_cose_p256_public_key(cbor_reader_t *reader,
                                           uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE]);
@@ -257,6 +285,10 @@ static uint8_t build_cose_public_key(const uint8_t public_key[FIDO_P256_PUBLIC_K
                                      uint16_t *out_len);
 static void ctap_build_large_blob_key(const fido_store_credential_t *credential,
                                       uint8_t out[CTAP_LARGEBLOB_KEY_SIZE]);
+static uint8_t usbd_ctap_min_error(uint8_t code,
+                                   uint8_t *resp,
+                                   uint16_t resp_cap,
+                                   uint16_t *resp_len);
 
 static void ctap_diag_note_request(uint8_t cmd,
                                    uint32_t allow_count,
@@ -1446,6 +1478,35 @@ static uint8_t ctap_verify_pin_uv_auth_param(const uint8_t client_data_hash[FIDO
   return (uint8_t)(memcmp(auth, pin_uv_auth_param, 16U) == 0U);
 }
 
+static uint8_t ctap_get_effective_min_pin_length(void)
+{
+  uint8_t min_pin_length = 0U;
+
+  (void)fido_store_client_pin_get_min_len(&min_pin_length);
+  if (min_pin_length < CTAP_PIN_MIN_LEN)
+  {
+    min_pin_length = CTAP_PIN_MIN_LEN;
+  }
+
+  return min_pin_length;
+}
+
+static uint8_t ctap_get_always_uv_enabled(void)
+{
+  uint8_t always_uv = 0U;
+
+  (void)fido_store_client_pin_get_always_uv(&always_uv);
+  return (uint8_t)(always_uv != 0U ? 1U : 0U);
+}
+
+static uint8_t ctap_get_force_pin_change_required(void)
+{
+  uint8_t force_change = 0U;
+
+  (void)fido_store_client_pin_get_force_change(&force_change);
+  return (uint8_t)(force_change != 0U ? 1U : 0U);
+}
+
 static uint8_t parse_make_credential(const uint8_t *req,
                                      uint16_t req_len,
                                      ctap_make_credential_req_t *parsed)
@@ -2039,6 +2100,7 @@ static uint8_t ctap_client_pin_decrypt_new_pin(const uint8_t shared_secret[FIDO_
 {
   uint8_t plaintext[CTAP_PIN_MAX_ENC_SIZE];
   uint16_t len = 0U;
+  uint8_t min_pin_len;
 
   if ((shared_secret == NULL) || (parsed == NULL) || (new_pin == NULL) || (new_pin_len == NULL) ||
       (parsed->has_new_pin_enc == 0U))
@@ -2059,7 +2121,8 @@ static uint8_t ctap_client_pin_decrypt_new_pin(const uint8_t shared_secret[FIDO_
   {
     len++;
   }
-  if ((len < CTAP_PIN_MIN_LEN) || (len >= parsed->new_pin_enc_len))
+  min_pin_len = ctap_get_effective_min_pin_length();
+  if ((len < min_pin_len) || (len >= parsed->new_pin_enc_len))
   {
     return 0U;
   }
@@ -2746,6 +2809,124 @@ static uint8_t parse_config(const uint8_t *req,
   return 1U;
 }
 
+static uint8_t parse_large_blobs(const uint8_t *req,
+                                 uint16_t req_len,
+                                 ctap_large_blobs_req_t *parsed)
+{
+  cbor_reader_t reader;
+  uint32_t pair_count;
+  uint32_t i;
+
+  if ((req == NULL) || (req_len < 2U) || (parsed == NULL))
+  {
+    return 0U;
+  }
+
+  memset(parsed, 0, sizeof(*parsed));
+  reader.buf = &req[1];
+  reader.len = (uint16_t)(req_len - 1U);
+  reader.off = 0U;
+  if (cbor_enter_map(&reader, &pair_count) == 0U)
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < pair_count; ++i)
+  {
+    uint32_t key;
+
+    if (cbor_read_uint(&reader, &key) == 0U)
+    {
+      return 0U;
+    }
+
+    switch (key)
+    {
+      case CTAP_LARGEBLOBS_KEY_GET:
+      {
+        uint32_t value;
+
+        if ((cbor_read_uint(&reader, &value) == 0U) || (value > FIDO_STORE_LARGEBLOB_MAX))
+        {
+          return 0U;
+        }
+        parsed->get_len = (uint16_t)value;
+        parsed->has_get = 1U;
+        break;
+      }
+
+      case CTAP_LARGEBLOBS_KEY_SET:
+        if (cbor_read_bytes(&reader, &parsed->set_data) == 0U)
+        {
+          return 0U;
+        }
+        parsed->has_set = 1U;
+        break;
+
+      case CTAP_LARGEBLOBS_KEY_OFFSET:
+      {
+        uint32_t value;
+
+        if ((cbor_read_uint(&reader, &value) == 0U) || (value > FIDO_STORE_LARGEBLOB_MAX))
+        {
+          return 0U;
+        }
+        parsed->offset = (uint16_t)value;
+        parsed->has_offset = 1U;
+        break;
+      }
+
+      case CTAP_LARGEBLOBS_KEY_LENGTH:
+      {
+        uint32_t value;
+
+        if ((cbor_read_uint(&reader, &value) == 0U) || (value > FIDO_STORE_LARGEBLOB_MAX))
+        {
+          return 0U;
+        }
+        parsed->total_length = (uint16_t)value;
+        parsed->has_length = 1U;
+        break;
+      }
+
+      case CTAP_LARGEBLOBS_KEY_PIN_AUTH:
+      {
+        cbor_span_t span;
+
+        if ((cbor_read_bytes(&reader, &span) == 0U) || (span.len != sizeof(parsed->pin_auth)))
+        {
+          return 0U;
+        }
+        memcpy(parsed->pin_auth, span.ptr, sizeof(parsed->pin_auth));
+        parsed->has_pin_auth = 1U;
+        break;
+      }
+
+      case CTAP_LARGEBLOBS_KEY_PIN_PROTOCOL:
+      {
+        uint32_t value;
+
+        if (cbor_read_uint(&reader, &value) == 0U)
+        {
+          return 0U;
+        }
+        parsed->pin_protocol = (uint8_t)value;
+        parsed->has_pin_protocol = 1U;
+        break;
+      }
+
+      default:
+        if (cbor_skip_item(&reader) == 0U)
+        {
+          return 0U;
+        }
+        break;
+    }
+  }
+
+  return 1U;
+}
+
 static uint8_t ctap_credman_verify_pin_auth(const ctap_cred_mgmt_req_t *parsed)
 {
   uint8_t auth[FIDO_SHA256_SIZE];
@@ -2824,6 +3005,170 @@ static uint8_t ctap_config_verify_pin_auth(const ctap_config_req_t *parsed)
   fido_crypto_hmac_sha256(s_ctap_pin_token, sizeof(s_ctap_pin_token), data, data_len, auth);
   return (uint8_t)(memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) == 0 ?
                    CTAP_STATUS_OK : CTAP_ERR_PIN_AUTH_INVALID);
+}
+
+static void ctap_largeblobs_reset_write_state(void)
+{
+  s_ctap_largeblob_write_active = 0U;
+  s_ctap_largeblob_write_expected_len = 0U;
+  s_ctap_largeblob_write_received_len = 0U;
+}
+
+static uint8_t ctap_largeblobs_verify_pin_auth(const ctap_large_blobs_req_t *parsed)
+{
+  uint8_t auth[FIDO_SHA256_SIZE];
+  uint8_t chunk_hash[FIDO_SHA256_SIZE];
+  uint8_t data[32U + 1U + 1U + 4U + FIDO_SHA256_SIZE];
+
+  if (parsed == NULL)
+  {
+    return CTAP_ERR_INTERNAL;
+  }
+  if (parsed->has_set == 0U)
+  {
+    return CTAP_STATUS_OK;
+  }
+  if (fido_store_client_pin_is_set() == 0U)
+  {
+    return CTAP_STATUS_OK;
+  }
+  if ((parsed->has_pin_protocol == 0U) || (parsed->pin_protocol != CTAP_PIN_PROTOCOL_ONE) || (parsed->has_pin_auth == 0U))
+  {
+    return CTAP_ERR_PIN_REQUIRED;
+  }
+  if (s_ctap_pin_token_valid == 0U)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
+
+  memset(data, 0xFF, 32U);
+  data[32] = CTAP_CMD_LARGE_BLOBS;
+  data[33] = 0x00U;
+  data[34] = (uint8_t)(parsed->offset & 0xFFU);
+  data[35] = (uint8_t)((parsed->offset >> 8) & 0xFFU);
+  data[36] = 0x00U;
+  data[37] = 0x00U;
+  fido_crypto_sha256(parsed->set_data.ptr, parsed->set_data.len, chunk_hash);
+  memcpy(&data[38], chunk_hash, sizeof(chunk_hash));
+  fido_crypto_hmac_sha256(s_ctap_pin_token, sizeof(s_ctap_pin_token), data, sizeof(data), auth);
+
+  return (uint8_t)(memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) == 0 ?
+                   CTAP_STATUS_OK : CTAP_ERR_PIN_AUTH_INVALID);
+}
+
+static uint8_t usbd_ctap_min_handle_large_blobs(const uint8_t *req,
+                                                uint16_t req_len,
+                                                uint8_t *resp,
+                                                uint16_t resp_cap,
+                                                uint16_t *resp_len)
+{
+  ctap_large_blobs_req_t parsed;
+  uint8_t auth_status;
+
+  ctap_diag_note_request(CTAP_CMD_LARGE_BLOBS, 0U, 0U, 0U);
+
+  if (parse_large_blobs(req, req_len, &parsed) == 0U)
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_CBOR, resp, resp_cap, resp_len);
+  }
+  if (parsed.has_offset == 0U)
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
+  }
+  if ((parsed.has_get != 0U) && (parsed.has_set != 0U))
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
+  }
+
+  auth_status = ctap_largeblobs_verify_pin_auth(&parsed);
+  if (auth_status != CTAP_STATUS_OK)
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(auth_status, resp, resp_cap, resp_len);
+  }
+
+  if (parsed.has_get != 0U)
+  {
+    uint16_t off = 1U;
+    uint16_t actual_len = 0U;
+
+    if (fido_store_largeblob_read(parsed.offset,
+                                  s_ctap_largeblob_write_buf,
+                                  (uint16_t)((resp_cap > 8U) ?
+                                                 ((parsed.get_len < (uint16_t)(resp_cap - 8U)) ?
+                                                      parsed.get_len :
+                                                      (uint16_t)(resp_cap - 8U)) :
+                                                 0U),
+                                  &actual_len) == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
+    }
+
+    resp[0] = CTAP_STATUS_OK;
+    if ((cbor_write_map(1U, resp, resp_cap, &off) == 0U) ||
+        (cbor_write_uint(CTAP_LARGEBLOBS_KEY_GET, resp, resp_cap, &off) == 0U) ||
+        (cbor_write_bytes(s_ctap_largeblob_write_buf, actual_len, resp, resp_cap, &off) == 0U))
+    {
+      return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+    }
+    *resp_len = off;
+    ctap_diag_note_status(CTAP_STATUS_OK);
+    return USBD_CTAP_MIN_DONE;
+  }
+
+  if (parsed.has_set == 0U)
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
+  }
+  if (parsed.set_data.len == 0U)
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+  }
+
+  if (parsed.offset == 0U)
+  {
+    if ((parsed.has_length == 0U) || (parsed.total_length < 16U) || (parsed.total_length > FIDO_STORE_LARGEBLOB_MAX))
+    {
+      ctap_largeblobs_reset_write_state();
+      return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+    }
+    ctap_largeblobs_reset_write_state();
+    s_ctap_largeblob_write_active = 1U;
+    s_ctap_largeblob_write_expected_len = parsed.total_length;
+  }
+  else if (s_ctap_largeblob_write_active == 0U)
+  {
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
+  }
+
+  if ((parsed.offset != s_ctap_largeblob_write_received_len) ||
+      ((uint32_t)parsed.offset + parsed.set_data.len > s_ctap_largeblob_write_expected_len))
+  {
+    ctap_largeblobs_reset_write_state();
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+  }
+
+  memcpy(&s_ctap_largeblob_write_buf[parsed.offset], parsed.set_data.ptr, parsed.set_data.len);
+  s_ctap_largeblob_write_received_len = (uint16_t)(s_ctap_largeblob_write_received_len + parsed.set_data.len);
+  if (s_ctap_largeblob_write_received_len == s_ctap_largeblob_write_expected_len)
+  {
+    if (fido_store_largeblob_write(s_ctap_largeblob_write_buf, s_ctap_largeblob_write_expected_len) == 0U)
+    {
+      ctap_largeblobs_reset_write_state();
+      return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+    }
+    ctap_largeblobs_reset_write_state();
+  }
+
+  resp[0] = CTAP_STATUS_OK;
+  *resp_len = 1U;
+  ctap_diag_note_status(CTAP_STATUS_OK);
+  return USBD_CTAP_MIN_DONE;
 }
 
 static uint8_t ctap_assertion_policy_allows(const ctap_get_assertion_req_t *parsed,
@@ -3222,7 +3567,7 @@ static uint8_t ctap_collect_assertion_candidates(const uint8_t *req,
     return ctap_collect_assertion_candidates_from_allow_list(req, req_len, rp_id_hash, parsed, pin_uv_verified);
   }
 
-  for (slot_index = 0U; slot_index < FIDO_STORE_CREDENTIALS_MAX; ++slot_index)
+  for (slot_index = FIDO_STORE_CREDENTIALS_MAX; slot_index-- > 0U;)
   {
     fido_store_credential_t credential;
 
@@ -3414,6 +3759,7 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
                                                uint8_t include_cred_protect_ext,
                                                uint8_t include_cred_blob_ext,
                                                uint8_t include_hmac_secret_ext,
+                                               uint8_t user_verified,
                                                uint8_t *auth_data,
                                                uint16_t auth_cap,
                                                uint16_t *auth_len)
@@ -3479,6 +3825,7 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
   memcpy(&auth_data[off], rp_id_hash, FIDO_SHA256_SIZE);
   off = (uint16_t)(off + FIDO_SHA256_SIZE);
   auth_data[off++] = (uint8_t)(CTAP_FLAG_USER_PRESENT |
+                               (user_verified != 0U ? CTAP_FLAG_USER_VERIFIED : 0U) |
                                CTAP_FLAG_ATTESTED |
                                (ext_count != 0U ? CTAP_FLAG_EXTENSION_DATA : 0U));
   store_be32(&auth_data[off], 0U);
@@ -3507,6 +3854,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
                                               uint8_t include_cred_blob_ext,
                                               uint8_t include_hmac_secret_ext,
                                               uint8_t include_large_blob_key,
+                                              uint8_t user_verified,
                                               uint8_t *resp,
                                               uint16_t resp_cap,
                                               uint16_t *resp_len)
@@ -3528,6 +3876,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
                                       include_cred_protect_ext,
                                       include_cred_blob_ext,
                                       include_hmac_secret_ext,
+                                      user_verified,
                                       auth_data,
                                       sizeof(auth_data),
                                       &auth_len) == 0U)
@@ -3582,6 +3931,7 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
                                             uint32_t slot_index,
                                             const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                                             uint8_t user_present,
+                                            uint8_t user_verified,
                                             uint8_t *resp,
                                             uint16_t resp_cap,
                                             uint16_t *resp_len)
@@ -3651,6 +4001,7 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
 
   memcpy(&auth_data[0], rp_id_hash, FIDO_SHA256_SIZE);
   auth_data[32] = (uint8_t)((user_present != 0U ? CTAP_FLAG_USER_PRESENT : 0U) |
+                            (user_verified != 0U ? CTAP_FLAG_USER_VERIFIED : 0U) |
                             (ext_len != 0U ? CTAP_FLAG_EXTENSION_DATA : 0U));
   next_sign_count = credential->sign_count + ((user_present != 0U) ? 1U : 0U);
   store_be32(&auth_data[33], next_sign_count);
@@ -3734,7 +4085,7 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
   (void)fido_store_client_pin_get_force_change(&force_pin_change);
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map(10U, resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(11U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_array(3U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("U2F_V2", resp, resp_cap, &off) == 0U) ||
@@ -3749,7 +4100,7 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(8U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(9U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("rk", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("up", resp, resp_cap, &off) == 0U) ||
@@ -3764,6 +4115,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("clientPin", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(fido_store_client_pin_is_set(), resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("largeBlobs", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("setMinPINLength", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x05U, resp, resp_cap, &off) == 0U) ||
@@ -3771,6 +4124,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x06U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_array(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(CTAP_PIN_PROTOCOL_ONE, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x0BU, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(FIDO_STORE_LARGEBLOB_MAX, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x0CU, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(force_pin_change != 0U ? 1U : 0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x0DU, resp, resp_cap, &off) == 0U) ||
@@ -3871,7 +4226,7 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
         return usbd_ctap_min_error(CTAP_ERR_PIN_POLICY_VIOLATION, resp, resp_cap, resp_len);
       }
       ctap_pin_hash16_from_pin(new_pin, new_pin_len, stored_pin_hash);
-      if (fido_store_client_pin_set_hash(stored_pin_hash) == 0U)
+      if (fido_store_client_pin_set_hash(stored_pin_hash, (uint8_t)new_pin_len) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
@@ -3924,7 +4279,7 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
         return usbd_ctap_min_error(CTAP_ERR_PIN_POLICY_VIOLATION, resp, resp_cap, resp_len);
       }
       ctap_pin_hash16_from_pin(new_pin, new_pin_len, stored_pin_hash);
-      if (fido_store_client_pin_set_hash(stored_pin_hash) == 0U)
+      if (fido_store_client_pin_set_hash(stored_pin_hash, (uint8_t)new_pin_len) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
@@ -3938,6 +4293,10 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
       if (fido_store_client_pin_is_set() == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_NOT_SET, resp, resp_cap, resp_len);
+      }
+      if (ctap_get_force_pin_change_required() != 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_POLICY_VIOLATION, resp, resp_cap, resp_len);
       }
       if (s_ctap_pin_power_cycle_blocked != 0U)
       {
@@ -4236,6 +4595,7 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
   uint8_t auto_confirm;
   uint8_t pin_uv_verified = 0U;
   uint8_t cred_protect_policy = 0U;
+  uint8_t uv_required;
 
   ctap_diag_note_request(CTAP_CMD_MAKE_CREDENTIAL, 0U, 0U, 0U);
 
@@ -4255,6 +4615,8 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
   {
     return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
   }
+  uv_required = (uint8_t)(((parsed.option_uv_present != 0U) && (parsed.option_uv != 0U)) ||
+                          (ctap_get_always_uv_enabled() != 0U));
   if (parsed.has_pin_uv_auth_param != 0U)
   {
     if (fido_store_client_pin_is_set() == 0U)
@@ -4269,6 +4631,14 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
       return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
     }
     pin_uv_verified = 1U;
+  }
+  if ((uv_required != 0U) && (pin_uv_verified == 0U))
+  {
+    if (fido_store_client_pin_is_set() == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_PIN_NOT_SET, resp, resp_cap, resp_len);
+    }
+    return usbd_ctap_min_error(CTAP_ERR_PIN_REQUIRED, resp, resp_cap, resp_len);
   }
   cred_protect_policy = parsed.cred_protect_present != 0U ? parsed.cred_protect_policy : 0U;
   if ((cred_protect_policy == CTAP_CRED_PROTECT_UV_REQUIRED) && (pin_uv_verified == 0U))
@@ -4307,6 +4677,7 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
   uint8_t match_count;
   uint8_t auto_confirm;
   uint8_t pin_uv_verified = 0U;
+  uint8_t uv_required;
 
   ctap_diag_note_request(CTAP_CMD_GET_ASSERTION, 0U, 0U, 0U);
 
@@ -4322,6 +4693,8 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
   {
     return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
   }
+  uv_required = (uint8_t)(((parsed.option_uv_present != 0U) && (parsed.option_uv != 0U)) ||
+                          (ctap_get_always_uv_enabled() != 0U));
   if (parsed.has_pin_uv_auth_param != 0U)
   {
     if (fido_store_client_pin_is_set() == 0U)
@@ -4336,6 +4709,14 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
       return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
     }
     pin_uv_verified = 1U;
+  }
+  if ((uv_required != 0U) && (pin_uv_verified == 0U))
+  {
+    if (fido_store_client_pin_is_set() == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_PIN_NOT_SET, resp, resp_cap, resp_len);
+    }
+    return usbd_ctap_min_error(CTAP_ERR_PIN_REQUIRED, resp, resp_cap, resp_len);
   }
   fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
   match_count = ctap_collect_assertion_candidates(req, req_len, rp_id_hash, &parsed, pin_uv_verified);
@@ -4370,6 +4751,7 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
                                      slot_index,
                                      parsed.client_data_hash,
                                      0U,
+                                     pin_uv_verified,
                                      resp,
                                      resp_cap,
                                      resp_len) == 0U)
@@ -4434,6 +4816,14 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
       s_ctap_selection_index = 0U;
       ctap_credman_reset_state();
       return usbd_ctap_min_handle_config(req, req_len, resp, resp_cap, resp_len);
+
+    case CTAP_CMD_LARGE_BLOBS:
+      s_ctap_ui_state = USBD_CTAP_UI_IDLE;
+      s_ctap_pending_cmd = 0U;
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
+      ctap_credman_reset_state();
+      return usbd_ctap_min_handle_large_blobs(req, req_len, resp, resp_cap, resp_len);
 
     case CTAP_CMD_CRED_MGMT:
     case CTAP_CMD_CRED_MGMT_PRE:
@@ -4508,6 +4898,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     fido_store_credential_t credential;
     uint8_t rp_id_hash[FIDO_SHA256_SIZE];
     uint8_t cred_protect_policy = 0U;
+    uint8_t pin_uv_verified = 0U;
 
     if ((parse_make_credential(req, req_len, &parsed) == 0U) ||
         (parsed.has_client_data_hash == 0U) ||
@@ -4518,9 +4909,17 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
 
     fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
+    if ((parsed.has_pin_uv_auth_param != 0U) &&
+        (parsed.has_pin_uv_auth_protocol != 0U) &&
+        (ctap_verify_pin_uv_auth_param(parsed.client_data_hash,
+                                       parsed.pin_uv_auth_protocol,
+                                       parsed.pin_uv_auth_param) != 0U))
+    {
+      pin_uv_verified = 1U;
+    }
     cred_protect_policy = parsed.cred_protect_present != 0U ? parsed.cred_protect_policy : 0U;
     if ((cred_protect_policy == CTAP_CRED_PROTECT_UV_REQUIRED) &&
-        (parsed.has_pin_uv_auth_param == 0U))
+        (pin_uv_verified == 0U))
     {
       cred_protect_policy = CTAP_CRED_PROTECT_UV_OR_CRED_ID_REQ;
     }
@@ -4542,6 +4941,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                         (uint8_t)(parsed.cred_blob_len != 0U),
                                         parsed.hmac_secret_requested,
                                         parsed.large_blob_key_requested,
+                                        pin_uv_verified,
                                         resp,
                                         resp_cap,
                                         resp_len) == 0U))
@@ -4559,6 +4959,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     fido_store_credential_t credential;
     uint8_t rp_id_hash[FIDO_SHA256_SIZE];
     uint32_t slot_index = 0U;
+    uint8_t pin_uv_verified = 0U;
 
     if ((parse_get_assertion(req, req_len, &parsed) == 0U) ||
         (parsed.has_client_data_hash == 0U) ||
@@ -4568,6 +4969,14 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
 
     fido_crypto_sha256((const uint8_t *)parsed.rp_id, (uint32_t)strlen(parsed.rp_id), rp_id_hash);
+    if ((parsed.has_pin_uv_auth_param != 0U) &&
+        (parsed.has_pin_uv_auth_protocol != 0U) &&
+        (ctap_verify_pin_uv_auth_param(parsed.client_data_hash,
+                                       parsed.pin_uv_auth_protocol,
+                                       parsed.pin_uv_auth_param) != 0U))
+    {
+      pin_uv_verified = 1U;
+    }
     if ((s_ctap_selection_count != 0U) && (s_ctap_selection_index < s_ctap_selection_count))
     {
       credential = s_ctap_candidates[s_ctap_selection_index];
@@ -4580,7 +4989,13 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
 
       if (parsed.allow_credential_count == 0U)
       {
-        matched = fido_store_find(rp_id_hash, NULL, 0U, &credential, &slot_index);
+        matched = ctap_collect_assertion_candidates(req, req_len, rp_id_hash, &parsed, pin_uv_verified);
+        if ((matched != 0U) && (s_ctap_selection_count != 0U))
+        {
+          credential = s_ctap_candidates[0];
+          slot_index = s_ctap_candidate_slots[0];
+          matched = 1U;
+        }
       }
       else
       {
@@ -4610,6 +5025,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                      slot_index,
                                      parsed.client_data_hash,
                                      1U,
+                                     pin_uv_verified,
                                      resp,
                                      resp_cap,
                                      resp_len) == 0U)

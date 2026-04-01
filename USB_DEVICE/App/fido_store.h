@@ -8,6 +8,9 @@
 #define FIDO_STORE_RESERVED_BYTES   (1024u * 1024u)
 #define FIDO_STORE_SLOT_SIZE        4096u
 #define FIDO_STORE_CREDENTIALS_MAX  (FIDO_STORE_RESERVED_BYTES / FIDO_STORE_SLOT_SIZE)
+#define FIDO_STORE_CONFIG_REGION_SIZE 256U
+#define FIDO_STORE_LARGEBLOB_REGION_SIZE (FIDO_STORE_SLOT_SIZE - FIDO_STORE_CONFIG_REGION_SIZE)
+#define FIDO_STORE_LARGEBLOB_MAX    (FIDO_STORE_LARGEBLOB_REGION_SIZE - 16U)
 #define FIDO_CRED_BLOB_MAX          32U
 
 typedef struct
@@ -71,13 +74,20 @@ uint8_t fido_store_clear(void);
 uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, void *ctx);
 uint8_t fido_store_client_pin_is_set(void);
 uint8_t fido_store_client_pin_get_hash(uint8_t pin_hash16[16]);
-uint8_t fido_store_client_pin_set_hash(const uint8_t pin_hash16[16]);
+uint8_t fido_store_client_pin_set_hash(const uint8_t pin_hash16[16], uint8_t pin_len);
 uint8_t fido_store_client_pin_clear(void);
+uint8_t fido_store_client_pin_get_len(uint8_t *pin_len);
 uint8_t fido_store_client_pin_get_min_len(uint8_t *min_len);
 uint8_t fido_store_client_pin_set_min_len(uint8_t min_len);
 uint8_t fido_store_client_pin_get_force_change(uint8_t *force_change);
 uint8_t fido_store_client_pin_set_force_change(uint8_t force_change);
 uint8_t fido_store_client_pin_get_always_uv(uint8_t *always_uv);
 uint8_t fido_store_client_pin_set_always_uv(uint8_t always_uv);
+uint8_t fido_store_largeblob_read(uint16_t offset,
+                                  uint8_t *data,
+                                  uint16_t data_cap,
+                                  uint16_t *actual_len);
+uint8_t fido_store_largeblob_write(const uint8_t *data, uint16_t data_len);
+uint8_t fido_store_largeblob_clear(void);
 
 #endif

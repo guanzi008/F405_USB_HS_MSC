@@ -12,7 +12,10 @@
 #define FIDO_STORE_VERSION    0x0005u
 #define FIDO_STORE_CONFIG_MAGIC   0x554C4650u
 #define FIDO_STORE_CONFIG_VERSION_V1 0x0001u
-#define FIDO_STORE_CONFIG_VERSION    0x0002u
+#define FIDO_STORE_CONFIG_VERSION_V2 0x0002u
+#define FIDO_STORE_CONFIG_VERSION    0x0003u
+#define FIDO_STORE_LARGEBLOB_MAGIC   0x554C4642u
+#define FIDO_STORE_LARGEBLOB_VERSION 0x0001u
 
 typedef struct
 {
@@ -45,7 +48,17 @@ typedef struct
   uint8_t pin_hash16[16];
   uint8_t force_pin_change;
   uint8_t always_uv;
+  uint8_t pin_length;
 } fido_store_config_t;
+
+typedef struct
+{
+  uint32_t magic;
+  uint16_t version;
+  uint16_t data_len;
+  uint8_t reserved[8];
+  uint8_t data[FIDO_STORE_LARGEBLOB_MAX];
+} fido_store_largeblob_t;
 
 static uint32_t s_runtime_sign_count[FIDO_STORE_CREDENTIALS_MAX];
 static uint8_t s_runtime_sign_count_valid[FIDO_STORE_CREDENTIALS_MAX];
@@ -76,6 +89,11 @@ static uint32_t fido_store_slot_address(uint32_t slot_index)
 static uint32_t fido_store_config_address(void)
 {
   return fido_store_slot_address(FIDO_STORE_CREDENTIALS_MAX - 1U);
+}
+
+static uint32_t fido_store_largeblob_address(void)
+{
+  return fido_store_config_address() + FIDO_STORE_CONFIG_REGION_SIZE;
 }
 
 static uint8_t fido_store_read_slot(uint32_t slot_index, fido_store_slot_t *slot)
@@ -118,12 +136,41 @@ static uint8_t fido_store_write_config(const fido_store_config_t *config)
   return ext_flash_write(fido_store_config_address(), (const uint8_t *)config, sizeof(*config));
 }
 
+static uint8_t fido_store_read_largeblob(fido_store_largeblob_t *largeblob)
+{
+  if (largeblob == NULL)
+  {
+    return 0U;
+  }
+
+  return ext_flash_read(fido_store_largeblob_address(), (uint8_t *)largeblob, sizeof(*largeblob));
+}
+
+static uint8_t fido_store_write_largeblob(const fido_store_largeblob_t *largeblob)
+{
+  if (largeblob == NULL)
+  {
+    return 0U;
+  }
+
+  return ext_flash_write(fido_store_largeblob_address(), (const uint8_t *)largeblob, sizeof(*largeblob));
+}
+
 static uint8_t fido_store_config_valid(const fido_store_config_t *config)
 {
   return (uint8_t)((config != NULL) &&
                    (config->magic == FIDO_STORE_CONFIG_MAGIC) &&
                    ((config->version == FIDO_STORE_CONFIG_VERSION_V1) ||
+                    (config->version == FIDO_STORE_CONFIG_VERSION_V2) ||
                     (config->version == FIDO_STORE_CONFIG_VERSION)));
+}
+
+static uint8_t fido_store_largeblob_valid(const fido_store_largeblob_t *largeblob)
+{
+  return (uint8_t)((largeblob != NULL) &&
+                   (largeblob->magic == FIDO_STORE_LARGEBLOB_MAGIC) &&
+                   (largeblob->version == FIDO_STORE_LARGEBLOB_VERSION) &&
+                   (largeblob->data_len <= FIDO_STORE_LARGEBLOB_MAX));
 }
 
 static uint8_t fido_store_slot_valid(const fido_store_slot_t *slot)
@@ -598,7 +645,7 @@ uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, voi
 
   if (progress_cb != NULL)
   {
-    progress_cb(0U, (uint16_t)(valid_total + 1U), ctx);
+    progress_cb(0U, (uint16_t)(valid_total + 2U), ctx);
   }
 
   for (slot_index = 0U; slot_index < fido_store_credential_slot_limit(); ++slot_index)
@@ -618,18 +665,29 @@ uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, voi
     progress_step++;
     if (progress_cb != NULL)
     {
-      progress_cb(progress_step, (uint16_t)(valid_total + 1U), ctx);
+      progress_cb(progress_step, (uint16_t)(valid_total + 2U), ctx);
     }
+  }
+
+  if (fido_store_largeblob_clear() == 0U)
+  {
+    return 0U;
+  }
+  progress_step++;
+  if (progress_cb != NULL)
+  {
+    progress_cb(progress_step, (uint16_t)(valid_total + 2U), ctx);
   }
 
   if (fido_store_client_pin_clear() == 0U)
   {
     return 0U;
   }
+  progress_step++;
 
   if (progress_cb != NULL)
   {
-    progress_cb((uint16_t)(valid_total + 1U), (uint16_t)(valid_total + 1U), ctx);
+    progress_cb(progress_step, (uint16_t)(valid_total + 2U), ctx);
   }
 
   return 1U;
@@ -675,12 +733,12 @@ uint8_t fido_store_client_pin_get_hash(uint8_t pin_hash16[16])
   return 1U;
 }
 
-uint8_t fido_store_client_pin_set_hash(const uint8_t pin_hash16[16])
+uint8_t fido_store_client_pin_set_hash(const uint8_t pin_hash16[16], uint8_t pin_len)
 {
   fido_store_config_t config;
   fido_store_config_t old_config;
 
-  if ((pin_hash16 == NULL) || (fido_store_is_ready() == 0U))
+  if ((pin_hash16 == NULL) || (pin_len == 0U) || (fido_store_is_ready() == 0U))
   {
     return 0U;
   }
@@ -689,20 +747,21 @@ uint8_t fido_store_client_pin_set_hash(const uint8_t pin_hash16[16])
   memset(&old_config, 0, sizeof(old_config));
   if ((fido_store_read_config(&old_config) != 0U) && (fido_store_config_valid(&old_config) != 0U))
   {
-    config.min_pin_length = (old_config.version >= FIDO_STORE_CONFIG_VERSION) ? old_config.min_pin_length : 0U;
-    config.force_pin_change = (old_config.version >= FIDO_STORE_CONFIG_VERSION) ? old_config.force_pin_change : 0U;
-    config.always_uv = (old_config.version >= FIDO_STORE_CONFIG_VERSION) ? old_config.always_uv : 0U;
+    config.min_pin_length = (old_config.version >= FIDO_STORE_CONFIG_VERSION_V2) ? old_config.min_pin_length : 0U;
+    config.force_pin_change = 0U;
+    config.always_uv = (old_config.version >= FIDO_STORE_CONFIG_VERSION_V2) ? old_config.always_uv : 0U;
   }
   config.magic = FIDO_STORE_CONFIG_MAGIC;
   config.version = FIDO_STORE_CONFIG_VERSION;
   config.pin_is_set = 1U;
+  config.pin_length = pin_len;
   memcpy(config.pin_hash16, pin_hash16, 16U);
   return fido_store_write_config(&config);
 }
 
 uint8_t fido_store_client_pin_clear(void)
 {
-  uint8_t blank[FIDO_STORE_SLOT_SIZE];
+  uint8_t blank[FIDO_STORE_CONFIG_REGION_SIZE];
 
   if (fido_store_is_ready() == 0U)
   {
@@ -711,6 +770,30 @@ uint8_t fido_store_client_pin_clear(void)
 
   memset(blank, 0xFF, sizeof(blank));
   return ext_flash_write(fido_store_config_address(), blank, sizeof(blank));
+}
+
+uint8_t fido_store_client_pin_get_len(uint8_t *pin_len)
+{
+  fido_store_config_t config;
+
+  if ((pin_len == NULL) || (fido_store_is_ready() == 0U))
+  {
+    return 0U;
+  }
+  if ((fido_store_read_config(&config) == 0U) || (fido_store_config_valid(&config) == 0U) || (config.pin_is_set == 0U))
+  {
+    *pin_len = 0U;
+    return 0U;
+  }
+
+  if (config.version >= FIDO_STORE_CONFIG_VERSION)
+  {
+    *pin_len = config.pin_length;
+    return 1U;
+  }
+
+  *pin_len = 0U;
+  return 0U;
 }
 
 uint8_t fido_store_client_pin_get_min_len(uint8_t *min_len)
@@ -727,7 +810,7 @@ uint8_t fido_store_client_pin_get_min_len(uint8_t *min_len)
     return 0U;
   }
 
-  if (config.version >= FIDO_STORE_CONFIG_VERSION)
+  if (config.version >= FIDO_STORE_CONFIG_VERSION_V2)
   {
     *min_len = config.min_pin_length;
   }
@@ -759,6 +842,10 @@ uint8_t fido_store_client_pin_set_min_len(uint8_t min_len)
     config.version = FIDO_STORE_CONFIG_VERSION;
   }
   config.min_pin_length = min_len;
+  if ((config.pin_is_set != 0U) && ((config.pin_length == 0U) || (config.pin_length < min_len)))
+  {
+    config.force_pin_change = 1U;
+  }
   return fido_store_write_config(&config);
 }
 
@@ -776,7 +863,7 @@ uint8_t fido_store_client_pin_get_force_change(uint8_t *force_change)
     return 0U;
   }
 
-  if (config.version >= FIDO_STORE_CONFIG_VERSION)
+  if (config.version >= FIDO_STORE_CONFIG_VERSION_V2)
   {
     *force_change = (uint8_t)(config.force_pin_change != 0U ? 1U : 0U);
   }
@@ -825,7 +912,7 @@ uint8_t fido_store_client_pin_get_always_uv(uint8_t *always_uv)
     return 0U;
   }
 
-  if (config.version >= FIDO_STORE_CONFIG_VERSION)
+  if (config.version >= FIDO_STORE_CONFIG_VERSION_V2)
   {
     *always_uv = (uint8_t)(config.always_uv != 0U ? 1U : 0U);
   }
@@ -858,4 +945,79 @@ uint8_t fido_store_client_pin_set_always_uv(uint8_t always_uv)
   }
   config.always_uv = (uint8_t)(always_uv != 0U ? 1U : 0U);
   return fido_store_write_config(&config);
+}
+
+uint8_t fido_store_largeblob_read(uint16_t offset,
+                                  uint8_t *data,
+                                  uint16_t data_cap,
+                                  uint16_t *actual_len)
+{
+  fido_store_largeblob_t largeblob;
+  uint16_t remaining;
+  uint16_t copy_len;
+
+  if ((actual_len == NULL) || ((data == NULL) && (data_cap != 0U)) || (fido_store_is_ready() == 0U))
+  {
+    return 0U;
+  }
+  if (fido_store_read_largeblob(&largeblob) == 0U)
+  {
+    return 0U;
+  }
+  if (fido_store_largeblob_valid(&largeblob) == 0U)
+  {
+    *actual_len = 0U;
+    return 1U;
+  }
+  if (offset > largeblob.data_len)
+  {
+    return 0U;
+  }
+
+  remaining = (uint16_t)(largeblob.data_len - offset);
+  copy_len = remaining;
+  if (copy_len > data_cap)
+  {
+    copy_len = data_cap;
+  }
+  if ((copy_len != 0U) && (data != NULL))
+  {
+    memcpy(data, &largeblob.data[offset], copy_len);
+  }
+  *actual_len = copy_len;
+  return 1U;
+}
+
+uint8_t fido_store_largeblob_write(const uint8_t *data, uint16_t data_len)
+{
+  fido_store_largeblob_t largeblob;
+
+  if (((data == NULL) && (data_len != 0U)) || (data_len > FIDO_STORE_LARGEBLOB_MAX) || (fido_store_is_ready() == 0U))
+  {
+    return 0U;
+  }
+
+  memset(&largeblob, 0xFF, sizeof(largeblob));
+  largeblob.magic = FIDO_STORE_LARGEBLOB_MAGIC;
+  largeblob.version = FIDO_STORE_LARGEBLOB_VERSION;
+  largeblob.data_len = data_len;
+  if (data_len != 0U)
+  {
+    memcpy(largeblob.data, data, data_len);
+  }
+
+  return fido_store_write_largeblob(&largeblob);
+}
+
+uint8_t fido_store_largeblob_clear(void)
+{
+  uint8_t blank[FIDO_STORE_LARGEBLOB_REGION_SIZE];
+
+  if (fido_store_is_ready() == 0U)
+  {
+    return 0U;
+  }
+
+  memset(blank, 0xFF, sizeof(blank));
+  return ext_flash_write(fido_store_largeblob_address(), blank, sizeof(blank));
 }
