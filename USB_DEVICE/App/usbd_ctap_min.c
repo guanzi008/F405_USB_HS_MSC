@@ -50,6 +50,9 @@
 #define CTAP_PIN_MAX_ENC_SIZE        64U
 #define CTAP_PIN_MIN_LEN             4U
 #define CTAP_PIN_MAX_RETRIES         8U
+#define CTAP_HMAC_SECRET_SALT_MAX    64U
+#define CTAP_HMAC_SECRET_AUTH_MAX    32U
+#define CTAP_HMAC_SECRET_OUT_MAX     64U
 
 #define CTAP_CRED_MGMT_KEY_SUBCMD       0x01U
 #define CTAP_CRED_MGMT_KEY_PARAMS       0x02U
@@ -114,6 +117,7 @@ typedef struct
   uint8_t option_uv;
   uint8_t cred_protect_present;
   uint8_t cred_protect_policy;
+  uint8_t hmac_secret_requested;
   uint8_t has_pin_uv_auth_param;
   uint8_t pin_uv_auth_param[16];
   uint8_t has_pin_uv_auth_protocol;
@@ -136,6 +140,17 @@ typedef struct
   uint8_t option_up;
   uint8_t option_uv_present;
   uint8_t option_uv;
+  uint8_t hmac_secret_requested;
+  uint8_t hmac_secret_has_key_agreement;
+  uint8_t hmac_secret_has_salt_enc;
+  uint8_t hmac_secret_has_salt_auth;
+  uint8_t hmac_secret_has_protocol;
+  uint8_t hmac_secret_protocol;
+  uint8_t hmac_secret_key_agreement_pub[FIDO_P256_PUBLIC_KEY_SIZE];
+  uint8_t hmac_secret_salt_enc[CTAP_HMAC_SECRET_SALT_MAX];
+  uint16_t hmac_secret_salt_enc_len;
+  uint8_t hmac_secret_salt_auth[CTAP_HMAC_SECRET_AUTH_MAX];
+  uint16_t hmac_secret_salt_auth_len;
   uint8_t has_pin_uv_auth_param;
   uint8_t pin_uv_auth_param[16];
   uint8_t has_pin_uv_auth_protocol;
@@ -220,6 +235,9 @@ static uint16_t s_ctap_credman_rp_cursor;
 static uint16_t s_ctap_credman_rp_total;
 static uint16_t s_ctap_credman_rk_cursor;
 static uint16_t s_ctap_credman_rk_total;
+
+static uint8_t parse_cose_p256_public_key(cbor_reader_t *reader,
+                                          uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE]);
 
 static uint8_t build_cose_public_key(const uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE],
                                      uint8_t *out,
@@ -1091,6 +1109,143 @@ static uint8_t parse_make_credential_extensions(cbor_reader_t *reader,
       parsed->cred_protect_present = 1U;
       parsed->cred_protect_policy = (uint8_t)policy;
     }
+    else if (cbor_text_eq(&name, "hmac-secret") != 0U)
+    {
+      uint8_t enabled = 0U;
+
+      if (cbor_read_bool(reader, &enabled) == 0U)
+      {
+        return 0U;
+      }
+      parsed->hmac_secret_requested = (uint8_t)(enabled != 0U ? 1U : 0U);
+    }
+    else if (cbor_skip_item(reader) == 0U)
+    {
+      return 0U;
+    }
+  }
+
+  return 1U;
+}
+
+static uint8_t parse_get_assertion_hmac_secret(cbor_reader_t *reader,
+                                               ctap_get_assertion_req_t *parsed)
+{
+  uint32_t pair_count;
+  uint32_t i;
+
+  if ((reader == NULL) || (parsed == NULL) || (cbor_enter_map(reader, &pair_count) == 0U))
+  {
+    return 0U;
+  }
+
+  parsed->hmac_secret_requested = 1U;
+  for (i = 0U; i < pair_count; ++i)
+  {
+    uint32_t key;
+
+    if (cbor_read_uint(reader, &key) == 0U)
+    {
+      return 0U;
+    }
+
+    switch (key)
+    {
+      case 0x01U:
+        if (parse_cose_p256_public_key(reader, parsed->hmac_secret_key_agreement_pub) == 0U)
+        {
+          return 0U;
+        }
+        parsed->hmac_secret_has_key_agreement = 1U;
+        break;
+
+      case 0x02U:
+      {
+        cbor_span_t span;
+
+        if ((cbor_read_bytes(reader, &span) == 0U) ||
+            ((span.len != 32U) && (span.len != 64U)) ||
+            (span.len > sizeof(parsed->hmac_secret_salt_enc)) ||
+            ((span.len & 0x0FU) != 0U))
+        {
+          return 0U;
+        }
+        memcpy(parsed->hmac_secret_salt_enc, span.ptr, span.len);
+        parsed->hmac_secret_salt_enc_len = span.len;
+        parsed->hmac_secret_has_salt_enc = 1U;
+        break;
+      }
+
+      case 0x03U:
+      {
+        cbor_span_t span;
+
+        if ((cbor_read_bytes(reader, &span) == 0U) ||
+            (span.len == 0U) ||
+            (span.len > sizeof(parsed->hmac_secret_salt_auth)))
+        {
+          return 0U;
+        }
+        memcpy(parsed->hmac_secret_salt_auth, span.ptr, span.len);
+        parsed->hmac_secret_salt_auth_len = span.len;
+        parsed->hmac_secret_has_salt_auth = 1U;
+        break;
+      }
+
+      case 0x04U:
+      {
+        uint32_t value;
+
+        if (cbor_read_uint(reader, &value) == 0U)
+        {
+          return 0U;
+        }
+        parsed->hmac_secret_protocol = (uint8_t)value;
+        parsed->hmac_secret_has_protocol = 1U;
+        break;
+      }
+
+      default:
+        if (cbor_skip_item(reader) == 0U)
+        {
+          return 0U;
+        }
+        break;
+    }
+  }
+
+  return (uint8_t)((parsed->hmac_secret_has_key_agreement != 0U) &&
+                   (parsed->hmac_secret_has_salt_enc != 0U) &&
+                   (parsed->hmac_secret_has_salt_auth != 0U));
+}
+
+static uint8_t parse_get_assertion_extensions(cbor_reader_t *reader,
+                                              ctap_get_assertion_req_t *parsed)
+{
+  uint32_t ext_count;
+  uint32_t ext_index;
+
+  if ((reader == NULL) || (parsed == NULL) || (cbor_enter_map(reader, &ext_count) == 0U))
+  {
+    return 0U;
+  }
+
+  for (ext_index = 0U; ext_index < ext_count; ++ext_index)
+  {
+    cbor_span_t name;
+
+    if (cbor_read_text(reader, &name) == 0U)
+    {
+      return 0U;
+    }
+
+    if (cbor_text_eq(&name, "hmac-secret") != 0U)
+    {
+      if (parse_get_assertion_hmac_secret(reader, parsed) == 0U)
+      {
+        return 0U;
+      }
+    }
     else if (cbor_skip_item(reader) == 0U)
     {
       return 0U;
@@ -1400,7 +1555,7 @@ static uint8_t parse_get_assertion(const uint8_t *req,
         break;
 
       case CTAP_GA_KEY_EXTENSIONS:
-        if (cbor_skip_item(&reader) == 0U)
+        if (parse_get_assertion_extensions(&reader, parsed) == 0U)
         {
           return 0U;
         }
@@ -2963,9 +3118,112 @@ static uint8_t build_cose_public_key(const uint8_t public_key[FIDO_P256_PUBLIC_K
   return 1U;
 }
 
+static void ctap_build_hmac_secret_seed(const fido_store_credential_t *credential,
+                                        uint8_t out[FIDO_SHA256_SIZE])
+{
+  static const uint8_t k_label[] = "hmac-secret-v1";
+  uint8_t material[sizeof(k_label) - 1U + FIDO_CREDENTIAL_ID_SIZE + FIDO_SHA256_SIZE];
+  uint16_t off = 0U;
+
+  if ((credential == NULL) || (out == NULL))
+  {
+    return;
+  }
+
+  memcpy(&material[off], k_label, sizeof(k_label) - 1U);
+  off = (uint16_t)(off + (sizeof(k_label) - 1U));
+  memcpy(&material[off], credential->credential_id, credential->credential_id_len);
+  off = (uint16_t)(off + credential->credential_id_len);
+  memcpy(&material[off], credential->rp_id_hash, FIDO_SHA256_SIZE);
+  off = (uint16_t)(off + FIDO_SHA256_SIZE);
+  fido_crypto_hmac_sha256(credential->private_key,
+                          FIDO_P256_PRIVATE_KEY_SIZE,
+                          material,
+                          off,
+                          out);
+}
+
+static uint8_t ctap_build_hmac_secret_response(const ctap_get_assertion_req_t *parsed,
+                                               const fido_store_credential_t *credential,
+                                               uint8_t *enc_out,
+                                               uint16_t enc_cap,
+                                               uint16_t *enc_len)
+{
+  uint8_t shared_secret[FIDO_SHA256_SIZE];
+  uint8_t salt_plain[CTAP_HMAC_SECRET_SALT_MAX];
+  uint8_t salt_auth[FIDO_SHA256_SIZE];
+  uint8_t cred_secret[FIDO_SHA256_SIZE];
+  uint8_t secret_output[CTAP_HMAC_SECRET_OUT_MAX];
+
+  if ((parsed == NULL) || (credential == NULL) || (enc_out == NULL) || (enc_len == NULL))
+  {
+    return 0U;
+  }
+  if (parsed->hmac_secret_requested == 0U)
+  {
+    *enc_len = 0U;
+    return 1U;
+  }
+  if ((parsed->hmac_secret_has_protocol != 0U) &&
+      (parsed->hmac_secret_protocol != CTAP_PIN_PROTOCOL_ONE))
+  {
+    return 0U;
+  }
+  if ((parsed->hmac_secret_salt_auth_len != 16U) ||
+      ((parsed->hmac_secret_salt_enc_len != 32U) && (parsed->hmac_secret_salt_enc_len != 64U)) ||
+      (parsed->hmac_secret_salt_enc_len > enc_cap))
+  {
+    return 0U;
+  }
+  if ((ctap_pin_ensure_key_agreement() == 0U) ||
+      (fido_crypto_ecdh_shared_secret(s_ctap_pin_key_agreement_priv,
+                                      parsed->hmac_secret_key_agreement_pub,
+                                      shared_secret) == 0U))
+  {
+    return 0U;
+  }
+
+  fido_crypto_hmac_sha256(shared_secret,
+                          FIDO_SHA256_SIZE,
+                          parsed->hmac_secret_salt_enc,
+                          parsed->hmac_secret_salt_enc_len,
+                          salt_auth);
+  if (memcmp(salt_auth, parsed->hmac_secret_salt_auth, parsed->hmac_secret_salt_auth_len) != 0)
+  {
+    return 0U;
+  }
+  if (fido_crypto_aes256_cbc_zero_iv_decrypt(shared_secret,
+                                             parsed->hmac_secret_salt_enc,
+                                             parsed->hmac_secret_salt_enc_len,
+                                             salt_plain,
+                                             sizeof(salt_plain)) == 0U)
+  {
+    return 0U;
+  }
+
+  ctap_build_hmac_secret_seed(credential, cred_secret);
+  fido_crypto_hmac_sha256(cred_secret, FIDO_SHA256_SIZE, &salt_plain[0], 32U, &secret_output[0]);
+  if (parsed->hmac_secret_salt_enc_len == 64U)
+  {
+    fido_crypto_hmac_sha256(cred_secret, FIDO_SHA256_SIZE, &salt_plain[32], 32U, &secret_output[32]);
+  }
+  if (fido_crypto_aes256_cbc_zero_iv_encrypt(shared_secret,
+                                             secret_output,
+                                             parsed->hmac_secret_salt_enc_len,
+                                             enc_out,
+                                             enc_cap) == 0U)
+  {
+    return 0U;
+  }
+
+  *enc_len = parsed->hmac_secret_salt_enc_len;
+  return 1U;
+}
+
 static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                                                const fido_store_credential_t *credential,
                                                uint8_t include_cred_protect_ext,
+                                               uint8_t include_hmac_secret_ext,
                                                uint8_t *auth_data,
                                                uint16_t auth_cap,
                                                uint16_t *auth_len)
@@ -2974,9 +3232,10 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
       0x55U, 0x4CU, 0x54U, 0x52U, 0x41U, 0x4CU, 0x49U, 0x4EU,
       0x4BU, 0x2DU, 0x46U, 0x34U, 0x30U, 0x35U, 0x02U, 0x00U};
   uint8_t cose_key[96];
-  uint8_t ext_data[32];
+  uint8_t ext_data[48];
   uint16_t cose_key_len;
   uint16_t ext_len = 0U;
+  uint8_t ext_count = 0U;
   uint16_t off = 0U;
 
   if ((rp_id_hash == NULL) || (credential == NULL) || (auth_data == NULL) || (auth_len == NULL))
@@ -2987,10 +3246,28 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
   {
     return 0U;
   }
+  if (include_cred_protect_ext != 0U)
+  {
+    ext_count = (uint8_t)(ext_count + 1U);
+  }
+  if (include_hmac_secret_ext != 0U)
+  {
+    ext_count = (uint8_t)(ext_count + 1U);
+  }
+  if ((ext_count != 0U) &&
+      (cbor_write_map(ext_count, ext_data, sizeof(ext_data), &ext_len) == 0U))
+  {
+    return 0U;
+  }
   if ((include_cred_protect_ext != 0U) &&
-      ((cbor_write_map(1U, ext_data, sizeof(ext_data), &ext_len) == 0U) ||
-       (cbor_write_text("credProtect", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
+      ((cbor_write_text("credProtect", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
        (cbor_write_uint(credential->cred_protect_policy, ext_data, sizeof(ext_data), &ext_len) == 0U)))
+  {
+    return 0U;
+  }
+  if ((include_hmac_secret_ext != 0U) &&
+      ((cbor_write_text("hmac-secret", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
+       (cbor_write_bool(1U, ext_data, sizeof(ext_data), &ext_len) == 0U)))
   {
     return 0U;
   }
@@ -3003,7 +3280,7 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
   off = (uint16_t)(off + FIDO_SHA256_SIZE);
   auth_data[off++] = (uint8_t)(CTAP_FLAG_USER_PRESENT |
                                CTAP_FLAG_ATTESTED |
-                               (include_cred_protect_ext != 0U ? CTAP_FLAG_EXTENSION_DATA : 0U));
+                               (ext_count != 0U ? CTAP_FLAG_EXTENSION_DATA : 0U));
   store_be32(&auth_data[off], 0U);
   off = (uint16_t)(off + 4U);
   memcpy(&auth_data[off], k_aaguid, sizeof(k_aaguid));
@@ -3027,6 +3304,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
                                               const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                                               const fido_store_credential_t *credential,
                                               uint8_t include_cred_protect_ext,
+                                              uint8_t include_hmac_secret_ext,
                                               uint8_t *resp,
                                               uint16_t resp_cap,
                                               uint16_t *resp_len)
@@ -3044,6 +3322,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   if (build_make_credential_auth_data(rp_id_hash,
                                       credential,
                                       include_cred_protect_ext,
+                                      include_hmac_secret_ext,
                                       auth_data,
                                       sizeof(auth_data),
                                       &auth_len) == 0U)
@@ -3082,6 +3361,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
 }
 
 static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
+                                            const ctap_get_assertion_req_t *parsed,
                                             fido_store_credential_t *credential,
                                             uint32_t slot_index,
                                             const uint8_t client_data_hash[FIDO_SHA256_SIZE],
@@ -3090,26 +3370,58 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
                                             uint16_t resp_cap,
                                             uint16_t *resp_len)
 {
-  uint8_t auth_data[37];
+  uint8_t auth_data[160];
+  uint8_t ext_data[96];
+  uint8_t hmac_secret_enc[CTAP_HMAC_SECRET_OUT_MAX];
   uint8_t signature[80];
+  uint16_t auth_data_len = 37U;
+  uint16_t ext_len = 0U;
+  uint16_t hmac_secret_len = 0U;
   uint16_t signature_len = 0U;
   uint16_t off = 0U;
   uint32_t next_sign_count;
 
-  if ((rp_id_hash == NULL) || (credential == NULL) || (client_data_hash == NULL) ||
+  if ((rp_id_hash == NULL) || (parsed == NULL) || (credential == NULL) || (client_data_hash == NULL) ||
       (resp == NULL) || (resp_len == NULL))
   {
     return 0U;
   }
 
+  memset(auth_data, 0, sizeof(auth_data));
+  memset(ext_data, 0, sizeof(ext_data));
+  memset(hmac_secret_enc, 0, sizeof(hmac_secret_enc));
+
+  if ((parsed->hmac_secret_requested != 0U) &&
+      ((ctap_build_hmac_secret_response(parsed,
+                                        credential,
+                                        hmac_secret_enc,
+                                        sizeof(hmac_secret_enc),
+                                        &hmac_secret_len) == 0U) ||
+       (cbor_write_map(1U, ext_data, sizeof(ext_data), &ext_len) == 0U)))
+  {
+    return 0U;
+  }
+  if ((parsed->hmac_secret_requested != 0U) &&
+      ((cbor_write_text("hmac-secret", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
+       (cbor_write_bytes(hmac_secret_enc, hmac_secret_len, ext_data, sizeof(ext_data), &ext_len) == 0U)))
+  {
+    return 0U;
+  }
+
   memcpy(&auth_data[0], rp_id_hash, FIDO_SHA256_SIZE);
-  auth_data[32] = (uint8_t)((user_present != 0U) ? CTAP_FLAG_USER_PRESENT : 0U);
+  auth_data[32] = (uint8_t)((user_present != 0U ? CTAP_FLAG_USER_PRESENT : 0U) |
+                            (ext_len != 0U ? CTAP_FLAG_EXTENSION_DATA : 0U));
   next_sign_count = credential->sign_count + ((user_present != 0U) ? 1U : 0U);
   store_be32(&auth_data[33], next_sign_count);
+  if (ext_len != 0U)
+  {
+    memcpy(&auth_data[37], ext_data, ext_len);
+    auth_data_len = (uint16_t)(auth_data_len + ext_len);
+  }
 
   if ((fido_crypto_sign_es256_der(credential->private_key,
                                   auth_data,
-                                  sizeof(auth_data),
+                                  auth_data_len,
                                   client_data_hash,
                                   signature,
                                   sizeof(signature),
@@ -3132,7 +3444,7 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
       (cbor_write_text("type", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("public-key", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_bytes(auth_data, sizeof(auth_data), resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bytes(auth_data, auth_data_len, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
   {
@@ -3177,8 +3489,9 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_text("FIDO_2_0", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("FIDO_2_1_PRE", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_array(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array(2U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("credProtect", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("hmac-secret", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
@@ -3770,6 +4083,7 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
     s_ctap_selection_count = 0U;
     s_ctap_selection_index = 0U;
     if (build_get_assertion_response(rp_id_hash,
+                                     &parsed,
                                      &credential,
                                      slot_index,
                                      parsed.client_data_hash,
@@ -3941,6 +4255,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                         parsed.client_data_hash,
                                         &credential,
                                         (uint8_t)(cred_protect_policy != 0U),
+                                        parsed.hmac_secret_requested,
                                         resp,
                                         resp_cap,
                                         resp_len) == 0U))
@@ -4004,6 +4319,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
 
     if (build_get_assertion_response(rp_id_hash,
+                                     &parsed,
                                      &credential,
                                      slot_index,
                                      parsed.client_data_hash,

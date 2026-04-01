@@ -31,12 +31,12 @@
   - `setMinPINLength`
   - `forcePINChange`
 - `credProtect`
+- `hmac-secret`
 - 基础 `credMgmt`
 - 板上 `删除密钥 / 清空密钥`
 
 当前仍在继续补全：
 
-- `hmac-secret`
 - 更完整的 `credMgmt`
 - Windows Hello 账户登录场景的进一步兼容
 
@@ -175,6 +175,15 @@ fido2-token -S -l 6 /dev/hidrawX
 fido2-token -S -u /dev/hidrawX
 ```
 
+### hmac-secret 注册与认证
+
+```bash
+fido2-cred -M -h -i cred_param /dev/hidrawX es256
+fido2-cred -V -h -i cred_out -o cred_pub es256
+fido2-assert -G -h -p -i assert_param /dev/hidrawX
+fido2-assert -V -h -i assert_out cred_pub es256
+```
+
 ## 板上交互
 
 - 旋钮：菜单选择
@@ -193,5 +202,5 @@ fido2-token -S -u /dev/hidrawX
 ## 已知边界
 
 - Windows Hello 的 `PIN / reset` 管理链已经推进，但“直接作为 Windows 账户登录密钥”的兼容还没有完全收口。
-- `hmac-secret`、更完整的 `credMgmt`、更完整的 CTAP2.1 扩展仍在继续补。
+- 更完整的 `credMgmt`、更完整的 CTAP2.1 扩展仍在继续补。
 - 当前文档以 Linux 开发和调试流程为主。
