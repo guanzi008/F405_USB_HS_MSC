@@ -4085,7 +4085,7 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
   (void)fido_store_client_pin_get_force_change(&force_pin_change);
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map(11U, resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(15U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_array(3U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("U2F_V2", resp, resp_cap, &off) == 0U) ||
@@ -4124,6 +4124,20 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x06U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_array(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(CTAP_PIN_PROTOCOL_ONE, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x07U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(CTAP_GA_ALLOW_LIST_MAX, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x08U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(FIDO_CREDENTIAL_ID_SIZE, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x09U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("usb", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x0AU, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("alg", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_nint(-7, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("type", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("public-key", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x0BU, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(FIDO_STORE_LARGEBLOB_MAX, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x0CU, resp, resp_cap, &off) == 0U) ||

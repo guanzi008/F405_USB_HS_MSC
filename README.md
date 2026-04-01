@@ -207,6 +207,10 @@ fido2-token -I /dev/hidrawX
 预期会看到：
 
 - `extension strings: ... largeBlobKey`
+- `transport strings: usb`
+- `algorithms: es256 (public-key)`
+- `maxcredcntlst: 64`
+- `maxcredlen: 32`
 - `maxlargeblob: 3824`
 
 ## 板上交互
