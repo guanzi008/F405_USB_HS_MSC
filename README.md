@@ -32,12 +32,16 @@
   - `forcePINChange`
 - `credProtect`
 - `hmac-secret`
-- 基础 `credMgmt`
+- 更完整的 `credMgmt`
+  - metadata
+  - enumerate RPs
+  - enumerate credentials
+  - delete credential
+  - update user information
 - 板上 `删除密钥 / 清空密钥`
 
 当前仍在继续补全：
 
-- 更完整的 `credMgmt`
 - Windows Hello 账户登录场景的进一步兼容
 
 ## 目录

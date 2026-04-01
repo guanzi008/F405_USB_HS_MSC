@@ -65,6 +65,7 @@
 #define CTAP_CRED_MGMT_SUBCMD_RK_BEGIN  0x04U
 #define CTAP_CRED_MGMT_SUBCMD_RK_NEXT   0x05U
 #define CTAP_CRED_MGMT_SUBCMD_DELETE    0x06U
+#define CTAP_CRED_MGMT_SUBCMD_UPDATE    0x07U
 
 #define CTAP_CONFIG_KEY_SUBCMD          0x01U
 #define CTAP_CONFIG_KEY_PARAMS          0x02U
@@ -187,11 +188,16 @@ typedef struct
   uint8_t has_subcmd_params;
   uint8_t has_rp_id_hash;
   uint8_t has_credential_id;
+  uint8_t has_user;
   uint8_t pin_auth[16];
   cbor_span_t subcmd_params;
   uint8_t rp_id_hash[FIDO_SHA256_SIZE];
   uint8_t credential_id[FIDO_CREDENTIAL_ID_SIZE];
   uint16_t credential_id_len;
+  uint8_t user_id[64];
+  uint16_t user_id_len;
+  char user_name[64];
+  char user_display_name[64];
 } ctap_cred_mgmt_req_t;
 
 typedef struct
@@ -890,6 +896,81 @@ static uint8_t parse_user_map(cbor_reader_t *reader, ctap_make_credential_req_t 
         return 0U;
       }
       if (value.len > sizeof(parsed->user_id))
+      {
+        return 0U;
+      }
+      memcpy(parsed->user_id, value.ptr, value.len);
+      parsed->user_id_len = value.len;
+      found_id = 1U;
+    }
+    else if (cbor_text_eq(&key, "name") != 0U)
+    {
+      cbor_span_t value;
+      uint16_t copy_len;
+
+      if (cbor_read_text(reader, &value) == 0U)
+      {
+        return 0U;
+      }
+      copy_len = value.len;
+      if (copy_len >= sizeof(parsed->user_name))
+      {
+        copy_len = (uint16_t)(sizeof(parsed->user_name) - 1U);
+      }
+      memcpy(parsed->user_name, value.ptr, copy_len);
+      parsed->user_name[copy_len] = '\0';
+    }
+    else if (cbor_text_eq(&key, "displayName") != 0U)
+    {
+      cbor_span_t value;
+      uint16_t copy_len;
+
+      if (cbor_read_text(reader, &value) == 0U)
+      {
+        return 0U;
+      }
+      copy_len = value.len;
+      if (copy_len >= sizeof(parsed->user_display_name))
+      {
+        copy_len = (uint16_t)(sizeof(parsed->user_display_name) - 1U);
+      }
+      memcpy(parsed->user_display_name, value.ptr, copy_len);
+      parsed->user_display_name[copy_len] = '\0';
+    }
+    else if (cbor_skip_item(reader) == 0U)
+    {
+      return 0U;
+    }
+  }
+
+  return found_id;
+}
+
+static uint8_t parse_credman_user_map(cbor_reader_t *reader, ctap_cred_mgmt_req_t *parsed)
+{
+  uint32_t pair_count;
+  uint32_t i;
+  uint8_t found_id = 0U;
+
+  if ((reader == NULL) || (parsed == NULL) || (cbor_enter_map(reader, &pair_count) == 0U))
+  {
+    return 0U;
+  }
+
+  for (i = 0U; i < pair_count; ++i)
+  {
+    cbor_span_t key;
+
+    if (cbor_read_text(reader, &key) == 0U)
+    {
+      return 0U;
+    }
+
+    if (cbor_text_eq(&key, "id") != 0U)
+    {
+      cbor_span_t value;
+
+      if ((cbor_read_bytes(reader, &value) == 0U) || (value.len > sizeof(parsed->user_id)))
       {
         return 0U;
       }
@@ -2434,7 +2515,9 @@ static uint8_t parse_cred_mgmt(const uint8_t *req,
         memcpy(parsed->rp_id_hash, value.ptr, FIDO_SHA256_SIZE);
         parsed->has_rp_id_hash = 1U;
       }
-      else if ((parsed->subcmd == CTAP_CRED_MGMT_SUBCMD_DELETE) && (param_key == 2U))
+      else if (((parsed->subcmd == CTAP_CRED_MGMT_SUBCMD_DELETE) ||
+                (parsed->subcmd == CTAP_CRED_MGMT_SUBCMD_UPDATE)) &&
+               (param_key == 2U))
       {
         if (parse_credential_descriptor(&params_reader,
                                         parsed->credential_id,
@@ -2443,6 +2526,14 @@ static uint8_t parse_cred_mgmt(const uint8_t *req,
           return 0U;
         }
         parsed->has_credential_id = 1U;
+      }
+      else if ((parsed->subcmd == CTAP_CRED_MGMT_SUBCMD_UPDATE) && (param_key == 3U))
+      {
+        if (parse_credman_user_map(&params_reader, parsed) == 0U)
+        {
+          return 0U;
+        }
+        parsed->has_user = 1U;
       }
       else if (cbor_skip_item(&params_reader) == 0U)
       {
@@ -2857,6 +2948,7 @@ static uint8_t build_credman_rk_response(const fido_store_credential_t *credenti
   uint8_t cose_key[128];
   uint16_t cose_key_len = 0U;
   uint16_t off = 1U;
+  uint8_t field_count = 3U;
 
   if ((credential == NULL) || (resp == NULL) || (resp_len == NULL))
   {
@@ -2866,9 +2958,17 @@ static uint8_t build_credman_rk_response(const fido_store_credential_t *credenti
   {
     return 0U;
   }
+  if (include_total != 0U)
+  {
+    field_count = (uint8_t)(field_count + 1U);
+  }
+  if (credential->cred_protect_policy != 0U)
+  {
+    field_count = (uint8_t)(field_count + 1U);
+  }
 
   resp[0] = CTAP_STATUS_OK;
-  if ((cbor_write_map((uint32_t)(include_total != 0U ? 4U : 3U), resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(field_count, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(6U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_user_entity(credential, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(7U, resp, resp_cap, &off) == 0U) ||
@@ -2881,6 +2981,12 @@ static uint8_t build_credman_rk_response(const fido_store_credential_t *credenti
   if ((include_total != 0U) &&
       ((cbor_write_uint(9U, resp, resp_cap, &off) == 0U) ||
        (cbor_write_uint(total, resp, resp_cap, &off) == 0U)))
+  {
+    return 0U;
+  }
+  if ((credential->cred_protect_policy != 0U) &&
+      ((cbor_write_uint(10U, resp, resp_cap, &off) == 0U) ||
+       (cbor_write_uint(credential->cred_protect_policy, resp, resp_cap, &off) == 0U)))
   {
     return 0U;
   }
@@ -3860,6 +3966,32 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
         return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
       }
       if (fido_store_delete(slot_index) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+      }
+      resp[0] = CTAP_STATUS_OK;
+      *resp_len = 1U;
+      ctap_credman_reset_state();
+      ctap_diag_note_status(CTAP_STATUS_OK);
+      return USBD_CTAP_MIN_DONE;
+
+    case CTAP_CRED_MGMT_SUBCMD_UPDATE:
+      if ((parsed.has_credential_id == 0U) || (parsed.has_user == 0U) || (parsed.has_subcmd_params == 0U))
+      {
+        return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
+      }
+      if (fido_store_find_by_credential_id(parsed.credential_id,
+                                           parsed.credential_id_len,
+                                           &credential,
+                                           &slot_index) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+      }
+      if (fido_store_update_user(slot_index,
+                                 parsed.user_id,
+                                 parsed.user_id_len,
+                                 parsed.user_name,
+                                 parsed.user_display_name) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }

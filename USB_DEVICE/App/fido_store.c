@@ -490,6 +490,46 @@ uint8_t fido_store_delete_with_progress(uint32_t slot_index,
   return 1U;
 }
 
+uint8_t fido_store_update_user(uint32_t slot_index,
+                               const uint8_t *user_id,
+                               uint16_t user_id_len,
+                               const char *user_name,
+                               const char *user_display_name)
+{
+  fido_store_slot_t slot;
+
+  if ((fido_store_is_ready() == 0U) ||
+      (slot_index >= fido_store_credential_slot_limit()) ||
+      ((user_id == NULL) && (user_id_len != 0U)) ||
+      (user_id_len > sizeof(slot.user_id)))
+  {
+    return 0U;
+  }
+  if ((fido_store_read_slot(slot_index, &slot) == 0U) || (fido_store_slot_valid(&slot) == 0U))
+  {
+    return 0U;
+  }
+
+  memset(slot.user_id, 0, sizeof(slot.user_id));
+  memset(slot.user_name, 0, sizeof(slot.user_name));
+  memset(slot.user_display_name, 0, sizeof(slot.user_display_name));
+  slot.user_id_len = user_id_len;
+  if (user_id_len != 0U)
+  {
+    memcpy(slot.user_id, user_id, user_id_len);
+  }
+  if (user_name != NULL)
+  {
+    strncpy(slot.user_name, user_name, sizeof(slot.user_name) - 1U);
+  }
+  if (user_display_name != NULL)
+  {
+    strncpy(slot.user_display_name, user_display_name, sizeof(slot.user_display_name) - 1U);
+  }
+
+  return fido_store_write_slot(slot_index, &slot);
+}
+
 uint8_t fido_store_update_sign_count(uint32_t slot_index, uint32_t sign_count)
 {
   if ((fido_store_is_ready() == 0U) || (slot_index >= fido_store_credential_slot_limit()))

@@ -56,6 +56,11 @@ uint8_t fido_store_delete(uint32_t slot_index);
 uint8_t fido_store_delete_with_progress(uint32_t slot_index,
                                         fido_store_progress_cb_t progress_cb,
                                         void *ctx);
+uint8_t fido_store_update_user(uint32_t slot_index,
+                               const uint8_t *user_id,
+                               uint16_t user_id_len,
+                               const char *user_name,
+                               const char *user_display_name);
 uint8_t fido_store_update_sign_count(uint32_t slot_index, uint32_t sign_count);
 uint8_t fido_store_clear(void);
 uint8_t fido_store_clear_with_progress(fido_store_progress_cb_t progress_cb, void *ctx);
