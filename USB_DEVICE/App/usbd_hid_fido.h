@@ -12,7 +12,9 @@
 #define FIDO_HID_BROADCAST_CID      0xFFFFFFFFU
 
 #define FIDO_HID_CMD_PING           0x01U
+#define FIDO_HID_CMD_MSG            0x03U
 #define FIDO_HID_CMD_INIT           0x06U
+#define FIDO_HID_CMD_WINK           0x08U
 #define FIDO_HID_CMD_CBOR           0x10U
 #define FIDO_HID_CMD_CANCEL         0x11U
 #define FIDO_HID_CMD_ERROR          0x3FU
@@ -48,6 +50,7 @@ typedef struct
   uint8_t wait_user_presence;
   uint8_t pending_req_valid;
   uint16_t pending_cbor_len;
+  uint16_t pending_msg_len;
   uint32_t last_keepalive_ms;
   uint8_t pending_req_hash[FIDO_SHA256_SIZE];
   uint8_t rx_buf[FIDO_HID_MSG_MAX];

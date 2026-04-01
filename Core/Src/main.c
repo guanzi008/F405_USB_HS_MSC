@@ -94,6 +94,12 @@ static uint16_t s_delete_selection_index = 0u;
 static uint16_t s_delete_selection_count = 0u;
 static uint32_t s_delete_slot_index = 0xFFFFFFFFu;
 static char s_delete_selection_name[32];
+static uint8_t s_delete_btn_last = 1u;
+static uint8_t s_delete_btn_long_reported = 0u;
+static uint32_t s_delete_btn_press_ms = 0u;
+static uint8_t s_delete_btn_consume_release = 0u;
+static uint32_t s_delete_btn_ignore_until_ms = 0u;
+static uint8_t s_delete_back_swallow_short = 0u;
 
 static void fido_delete_refresh_state(void)
 {
@@ -135,6 +141,51 @@ static void fido_delete_refresh_state(void)
   lcd_status_set_fido_delete_state(s_delete_selection_count,
                                    s_delete_selection_index,
                                    s_delete_selection_name);
+}
+
+static void fido_delete_selected_credential(void)
+{
+  fido_store_credential_t verify_credential;
+  uint16_t count_before;
+  uint16_t count_after;
+  uint8_t slot_still_valid;
+  uint8_t delete_ok;
+
+  lcd_status_set_fido_store_result(0u);
+  if ((s_delete_selection_count == 0u) || (s_delete_slot_index == 0xFFFFFFFFu))
+  {
+    lcd_status_set_fido_store_result(2u);
+    return;
+  }
+
+  count_before = s_delete_selection_count;
+  lcd_status_set_fido_delete_progress(1u, 0u);
+  HAL_Delay(120u);
+  delete_ok = (uint8_t)(fido_store_delete_with_progress(s_delete_slot_index,
+                                                        fido_delete_progress_cb,
+                                                        NULL) != 0u ? 1u : 0u);
+  HAL_Delay(120u);
+  count_after = fido_store_count();
+  slot_still_valid = fido_store_get_by_index(s_delete_slot_index, &verify_credential);
+  printf("ADEL SLOT=%lu BEFORE=%u AFTER=%u OK=%u VALID=%u\r\n",
+         (unsigned long)s_delete_slot_index,
+         (unsigned)count_before,
+         (unsigned)count_after,
+         (unsigned)delete_ok,
+         (unsigned)slot_still_valid);
+  if ((delete_ok != 0u) &&
+      (count_after + 1u == count_before) &&
+      (slot_still_valid == 0u))
+  {
+    lcd_status_set_fido_store_result(1u);
+  }
+  else
+  {
+    lcd_status_set_fido_store_result(2u);
+  }
+  lcd_status_set_fido_delete_progress(0u, 100u);
+  HAL_Delay(450u);
+  fido_delete_refresh_state();
 }
 
 /* USER CODE END 0 */
@@ -196,9 +247,22 @@ int main(void)
     uint32_t input_events;
     uint32_t now = HAL_GetTick();
     uint8_t uart_rx = 0u;
+    uint8_t menu_active;
+    uint8_t active_app;
+    uint8_t local_ui_has_priority;
+    uint8_t in_local_page;
+    uint8_t delete_page_active;
 
     input_events = aux_inputs_poll(now);
+    aux_inputs_get_status(&aux_status);
     usbd_ctap_min_get_ui_status(&fido_ui);
+    menu_active = lcd_status_is_menu_active();
+    active_app = lcd_status_get_active_app();
+    local_ui_has_priority = (uint8_t)((menu_active == 0u) &&
+                                      ((active_app == LCD_STATUS_APP_WIPE) ||
+                                       (active_app == LCD_STATUS_APP_DELETE_KEY)));
+    in_local_page = (uint8_t)(menu_active == 0u);
+    delete_page_active = (uint8_t)((menu_active == 0u) && (active_app == LCD_STATUS_APP_DELETE_KEY));
     if (HAL_UART_Receive(&huart4, &uart_rx, 1u, 0u) == HAL_OK)
     {
       if ((uart_rx == 'y') || (uart_rx == 'Y'))
@@ -210,64 +274,123 @@ int main(void)
         usbd_ctap_min_note_user_denied();
       }
     }
+    if (delete_page_active != 0u)
+    {
+      if (aux_status.enc_btn != s_delete_btn_last)
+      {
+        s_delete_btn_last = aux_status.enc_btn;
+        if (aux_status.enc_btn == 0u)
+        {
+          s_delete_btn_press_ms = now;
+          s_delete_btn_long_reported = 0u;
+        }
+        else if (s_delete_btn_long_reported == 0u)
+        {
+          if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+          {
+            usbd_ctap_min_note_user_denied();
+          }
+          printf("ADELBTN SHORT CNT=%u SLOT=%lu POS=%ld\r\n",
+                 (unsigned)s_delete_selection_count,
+                 (unsigned long)s_delete_slot_index,
+                 (long)aux_status.encoder_position);
+          fido_delete_refresh_state();
+          fido_delete_selected_credential();
+        }
+      }
+      else if ((aux_status.enc_btn == 0u) &&
+               (s_delete_btn_long_reported == 0u) &&
+               ((uint32_t)(now - s_delete_btn_press_ms) >= 500u))
+      {
+        s_delete_btn_long_reported = 1u;
+        if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+        {
+          usbd_ctap_min_note_user_denied();
+        }
+        printf("ADELBTN LONG POS=%ld\r\n", (long)aux_status.encoder_position);
+        s_delete_btn_consume_release = 1u;
+        s_delete_btn_ignore_until_ms = now + 300u;
+        s_delete_back_swallow_short = 1u;
+        lcd_status_back();
+      }
+      input_events &= ~(AUX_INPUT_EVENT_BTN_DOWN | AUX_INPUT_EVENT_BTN_SHORT | AUX_INPUT_EVENT_BTN_LONG);
+    }
+    else
+    {
+      s_delete_btn_last = aux_status.enc_btn;
+      s_delete_btn_long_reported = 0u;
+      s_delete_btn_press_ms = now;
+      if ((s_delete_btn_ignore_until_ms != 0u) &&
+          ((int32_t)(now - s_delete_btn_ignore_until_ms) < 0))
+      {
+        input_events &= ~(AUX_INPUT_EVENT_BTN_DOWN | AUX_INPUT_EVENT_BTN_SHORT | AUX_INPUT_EVENT_BTN_LONG);
+      }
+      if (s_delete_btn_consume_release != 0u)
+      {
+        input_events &= ~(AUX_INPUT_EVENT_BTN_DOWN | AUX_INPUT_EVENT_BTN_SHORT | AUX_INPUT_EVENT_BTN_LONG);
+        if (aux_status.enc_btn != 0u)
+        {
+          s_delete_btn_consume_release = 0u;
+        }
+      }
+      else if ((s_delete_btn_ignore_until_ms != 0u) &&
+               ((int32_t)(now - s_delete_btn_ignore_until_ms) >= 0))
+      {
+        s_delete_btn_ignore_until_ms = 0u;
+      }
+      if (s_delete_back_swallow_short != 0u)
+      {
+        if ((input_events & AUX_INPUT_EVENT_BTN_SHORT) != 0u)
+        {
+          input_events &= ~AUX_INPUT_EVENT_BTN_SHORT;
+          s_delete_back_swallow_short = 0u;
+        }
+        else if ((input_events & AUX_INPUT_EVENT_BTN_DOWN) != 0u)
+        {
+          s_delete_back_swallow_short = 0u;
+        }
+      }
+    }
     if ((input_events & AUX_INPUT_EVENT_BTN_SHORT) != 0u)
     {
       usbd_ctap_min_get_ui_status(&fido_ui);
-      if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+      menu_active = lcd_status_is_menu_active();
+      active_app = lcd_status_get_active_app();
+      local_ui_has_priority = (uint8_t)((menu_active == 0u) &&
+                                        ((active_app == LCD_STATUS_APP_WIPE) ||
+                                         (active_app == LCD_STATUS_APP_DELETE_KEY)));
+      in_local_page = (uint8_t)(menu_active == 0u);
+      printf("ABTN SHORT MENU=%u APP=%u FUI=%u DCNT=%u SLOT=%lu POS=%ld EVT=%08lX\r\n",
+             (unsigned)menu_active,
+             (unsigned)active_app,
+             (unsigned)fido_ui.ui_state,
+             (unsigned)s_delete_selection_count,
+             (unsigned long)s_delete_slot_index,
+             (long)aux_status.encoder_position,
+             (unsigned long)input_events);
+      if ((menu_active == 0u) && (active_app == LCD_STATUS_APP_WIPE))
       {
-        usbd_ctap_min_note_user_presence();
-      }
-      else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == LCD_STATUS_APP_WIPE))
-      {
+        if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+        {
+          usbd_ctap_min_note_user_denied();
+        }
         lcd_status_set_fido_store_result(0u);
         lcd_status_set_fido_store_progress(1u, 0u);
         lcd_status_set_fido_store_result((uint8_t)(fido_store_clear_with_progress(fido_wipe_progress_cb, NULL) != 0u ? 1u : 2u));
         lcd_status_set_fido_store_progress(0u, 100u);
       }
-      else if ((lcd_status_is_menu_active() == 0u) && (lcd_status_get_active_app() == LCD_STATUS_APP_DELETE_KEY))
+      else if ((menu_active == 0u) && (active_app == LCD_STATUS_APP_DELETE_KEY))
       {
-        lcd_status_set_fido_store_result(0u);
-        if ((s_delete_selection_count != 0u) && (s_delete_slot_index != 0xFFFFFFFFu))
+        if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
         {
-          fido_store_credential_t verify_credential;
-          uint16_t count_before;
-          uint16_t count_after;
-          uint8_t slot_still_valid;
-          uint8_t delete_ok;
-
-          count_before = s_delete_selection_count;
-          lcd_status_set_fido_delete_progress(1u, 0u);
-          HAL_Delay(120u);
-          delete_ok = (uint8_t)(fido_store_delete_with_progress(s_delete_slot_index,
-                                                                fido_delete_progress_cb,
-                                                                NULL) != 0u ? 1u : 0u);
-          HAL_Delay(120u);
-          count_after = fido_store_count();
-          slot_still_valid = fido_store_get_by_index(s_delete_slot_index, &verify_credential);
-          printf("ADEL SLOT=%lu BEFORE=%u AFTER=%u OK=%u VALID=%u\r\n",
-                 (unsigned long)s_delete_slot_index,
-                 (unsigned)count_before,
-                 (unsigned)count_after,
-                 (unsigned)delete_ok,
-                 (unsigned)slot_still_valid);
-          if ((delete_ok != 0u) &&
-              (count_after + 1u == count_before) &&
-              (slot_still_valid == 0u))
-          {
-            lcd_status_set_fido_store_result(1u);
-          }
-          else
-          {
-            lcd_status_set_fido_store_result(2u);
-          }
-          lcd_status_set_fido_delete_progress(0u, 100u);
-          HAL_Delay(450u);
-          fido_delete_refresh_state();
+          usbd_ctap_min_note_user_denied();
         }
-        else
-        {
-          lcd_status_set_fido_store_result(2u);
-        }
+        fido_delete_refresh_state();
+        fido_delete_selected_credential();
+      }
+      else if ((fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH) && (local_ui_has_priority == 0u))
+      {
+        usbd_ctap_min_note_user_presence();
       }
       else
       {
@@ -277,17 +400,40 @@ int main(void)
     if ((input_events & AUX_INPUT_EVENT_BTN_LONG) != 0u)
     {
       usbd_ctap_min_get_ui_status(&fido_ui);
-      if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+      menu_active = lcd_status_is_menu_active();
+      active_app = lcd_status_get_active_app();
+      local_ui_has_priority = (uint8_t)((menu_active == 0u) &&
+                                        ((active_app == LCD_STATUS_APP_WIPE) ||
+                                         (active_app == LCD_STATUS_APP_DELETE_KEY)));
+      in_local_page = (uint8_t)(menu_active == 0u);
+      printf("ABTN LONG MENU=%u APP=%u FUI=%u DCNT=%u SLOT=%lu POS=%ld EVT=%08lX\r\n",
+             (unsigned)menu_active,
+             (unsigned)active_app,
+             (unsigned)fido_ui.ui_state,
+             (unsigned)s_delete_selection_count,
+             (unsigned long)s_delete_slot_index,
+             (long)aux_status.encoder_position,
+             (unsigned long)input_events);
+      if (local_ui_has_priority != 0u)
+      {
+        if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
+        {
+          usbd_ctap_min_note_user_denied();
+        }
+        lcd_status_back();
+      }
+      else if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
       {
         usbd_ctap_min_note_user_denied();
       }
-      else
+      else if (in_local_page != 0u)
       {
         lcd_status_back();
       }
     }
-    aux_inputs_get_status(&aux_status);
-    if ((fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
+    if ((menu_active == 0u) &&
+        (active_app == LCD_STATUS_APP_SECURITY) &&
+        (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
         (fido_ui.pending_cmd == CTAP_CMD_GET_ASSERTION) &&
         (fido_ui.selection_count > 1u))
     {

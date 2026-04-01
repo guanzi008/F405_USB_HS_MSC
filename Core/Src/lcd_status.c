@@ -534,7 +534,10 @@ static void lcd_redraw_page(void) {
             break;
       }
     }
-    if (s_last_fido_ui_state == USBD_CTAP_UI_WAIT_TOUCH) {
+    if ((s_last_fido_ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
+        !((s_menu_active == 0u) &&
+          ((s_active_app == LCD_STATUS_APP_WIPE) ||
+           (s_active_app == LCD_STATUS_APP_DELETE_KEY)))) {
         lcd_draw_fido_popup();
     }
     ls013_lcd_send_frame();

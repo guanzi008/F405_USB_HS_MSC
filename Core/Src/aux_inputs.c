@@ -182,6 +182,7 @@ uint32_t aux_inputs_poll(uint32_t now_ms) {
             if (s_aux.btn_stable == 0u) {
                 s_aux.btn_press_start_ms = now_ms;
                 s_aux.long_reported = 0u;
+                events |= AUX_INPUT_EVENT_BTN_DOWN;
             } else if (s_aux.long_reported == 0u) {
                 events |= AUX_INPUT_EVENT_BTN_SHORT;
             }

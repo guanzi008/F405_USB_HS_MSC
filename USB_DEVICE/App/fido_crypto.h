@@ -29,5 +29,32 @@ uint8_t fido_crypto_sign_es256_der(const uint8_t private_key[FIDO_P256_PRIVATE_K
                                    uint8_t *sig_der,
                                    uint16_t sig_der_cap,
                                    uint16_t *sig_der_len);
+uint8_t fido_crypto_sign_p256_sha256_der(const uint8_t private_key[FIDO_P256_PRIVATE_KEY_SIZE],
+                                         const uint8_t *data,
+                                         uint16_t data_len,
+                                         uint8_t *sig_der,
+                                         uint16_t sig_der_cap,
+                                         uint16_t *sig_der_len);
+void fido_crypto_hmac_sha256(const uint8_t *key,
+                             uint32_t key_len,
+                             const uint8_t *data,
+                             uint32_t data_len,
+                             uint8_t out[FIDO_SHA256_SIZE]);
+uint8_t fido_crypto_random(uint8_t *out, uint32_t len);
+uint8_t fido_crypto_make_ecdh_keypair(uint8_t private_key[FIDO_P256_PRIVATE_KEY_SIZE],
+                                      uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE]);
+uint8_t fido_crypto_ecdh_shared_secret(const uint8_t private_key[FIDO_P256_PRIVATE_KEY_SIZE],
+                                       const uint8_t peer_public_key[FIDO_P256_PUBLIC_KEY_SIZE],
+                                       uint8_t shared_secret[FIDO_SHA256_SIZE]);
+uint8_t fido_crypto_aes256_cbc_zero_iv_encrypt(const uint8_t key[32],
+                                               const uint8_t *input,
+                                               uint16_t input_len,
+                                               uint8_t *output,
+                                               uint16_t output_cap);
+uint8_t fido_crypto_aes256_cbc_zero_iv_decrypt(const uint8_t key[32],
+                                               const uint8_t *input,
+                                               uint16_t input_len,
+                                               uint8_t *output,
+                                               uint16_t output_cap);
 
 #endif

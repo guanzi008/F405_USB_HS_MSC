@@ -8,6 +8,7 @@
 #define AUX_INPUT_EVENT_CCW       0x00000002u
 #define AUX_INPUT_EVENT_BTN_SHORT 0x00000004u
 #define AUX_INPUT_EVENT_BTN_LONG  0x00000008u
+#define AUX_INPUT_EVENT_BTN_DOWN  0x00000010u
 
 typedef struct {
     uint8_t enc_a;
