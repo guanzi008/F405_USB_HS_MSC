@@ -8,7 +8,8 @@
 #define FIDO_STORE_VERSION_V1 0x0001u
 #define FIDO_STORE_VERSION_V2 0x0002u
 #define FIDO_STORE_VERSION_V3 0x0003u
-#define FIDO_STORE_VERSION    0x0004u
+#define FIDO_STORE_VERSION_V4 0x0004u
+#define FIDO_STORE_VERSION    0x0005u
 #define FIDO_STORE_CONFIG_MAGIC   0x554C4650u
 #define FIDO_STORE_CONFIG_VERSION_V1 0x0001u
 #define FIDO_STORE_CONFIG_VERSION    0x0002u
@@ -30,7 +31,9 @@ typedef struct
   char user_name[64];
   char user_display_name[64];
   uint8_t cred_protect_policy;
-  uint8_t reserved1[3];
+  uint8_t cred_blob_len;
+  uint8_t reserved1[2];
+  uint8_t cred_blob[FIDO_CRED_BLOB_MAX];
 } fido_store_slot_t;
 
 typedef struct
@@ -130,6 +133,7 @@ static uint8_t fido_store_slot_valid(const fido_store_slot_t *slot)
                    ((slot->version == FIDO_STORE_VERSION_V1) ||
                     (slot->version == FIDO_STORE_VERSION_V2) ||
                     (slot->version == FIDO_STORE_VERSION_V3) ||
+                    (slot->version == FIDO_STORE_VERSION_V4) ||
                     (slot->version == FIDO_STORE_VERSION)) &&
                    (slot->credential_id_len != 0U) &&
                    (slot->credential_id_len <= FIDO_CREDENTIAL_ID_SIZE));
@@ -142,13 +146,13 @@ static void fido_store_copy_out(uint32_t slot_index,
   memset(credential, 0, sizeof(*credential));
   credential->counter = slot->counter;
   credential->sign_count = slot->sign_count;
-  if (slot->version >= FIDO_STORE_VERSION)
+  if (slot->version >= FIDO_STORE_VERSION_V4)
   {
     credential->cred_protect_policy = slot->cred_protect_policy;
   }
   credential->credential_id_len = slot->credential_id_len;
   memcpy(credential->rp_id_hash, slot->rp_id_hash, sizeof(credential->rp_id_hash));
-  if (slot->version >= FIDO_STORE_VERSION)
+  if (slot->version >= FIDO_STORE_VERSION_V4)
   {
     memcpy(credential->rp_id, slot->rp_id, sizeof(credential->rp_id));
     credential->rp_id[sizeof(credential->rp_id) - 1U] = '\0';
@@ -167,6 +171,15 @@ static void fido_store_copy_out(uint32_t slot_index,
     credential->user_name[sizeof(credential->user_name) - 1U] = '\0';
     memcpy(credential->user_display_name, slot->user_display_name, sizeof(credential->user_display_name));
     credential->user_display_name[sizeof(credential->user_display_name) - 1U] = '\0';
+  }
+  if ((slot->version >= FIDO_STORE_VERSION) &&
+      (slot->cred_blob_len <= sizeof(credential->cred_blob)))
+  {
+    credential->cred_blob_len = slot->cred_blob_len;
+    if (credential->cred_blob_len != 0U)
+    {
+      memcpy(credential->cred_blob, slot->cred_blob, credential->cred_blob_len);
+    }
   }
 
   if ((slot_index < FIDO_STORE_CREDENTIALS_MAX) &&
@@ -189,6 +202,8 @@ uint8_t fido_store_register(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                             const char *rp_id,
                             const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                             uint8_t cred_protect_policy,
+                            const uint8_t *cred_blob,
+                            uint8_t cred_blob_len,
                             const uint8_t *user_id,
                             uint16_t user_id_len,
                             const char *user_name,
@@ -209,6 +224,8 @@ uint8_t fido_store_register(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
     return 0U;
   }
   if ((user_id_len > sizeof(slot.user_id)) ||
+      (cred_blob_len > sizeof(slot.cred_blob)) ||
+      ((cred_blob == NULL) && (cred_blob_len != 0U)) ||
       ((user_id == NULL) && (user_id_len != 0U)))
   {
     return 0U;
@@ -246,10 +263,15 @@ uint8_t fido_store_register(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
   slot.counter = next_counter;
   slot.sign_count = 0U;
   slot.cred_protect_policy = cred_protect_policy;
+  slot.cred_blob_len = cred_blob_len;
   slot.credential_id_len = FIDO_CREDENTIAL_ID_SIZE;
   slot.user_id_len = user_id_len;
   memcpy(slot.rp_id_hash, rp_id_hash, FIDO_SHA256_SIZE);
   strncpy(slot.rp_id, rp_id, sizeof(slot.rp_id) - 1U);
+  if (cred_blob_len != 0U)
+  {
+    memcpy(slot.cred_blob, cred_blob, cred_blob_len);
+  }
   if (user_id_len != 0U)
   {
     memcpy(slot.user_id, user_id, user_id_len);

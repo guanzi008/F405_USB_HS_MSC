@@ -8,12 +8,14 @@
 #define FIDO_STORE_RESERVED_BYTES   (1024u * 1024u)
 #define FIDO_STORE_SLOT_SIZE        4096u
 #define FIDO_STORE_CREDENTIALS_MAX  (FIDO_STORE_RESERVED_BYTES / FIDO_STORE_SLOT_SIZE)
+#define FIDO_CRED_BLOB_MAX          32U
 
 typedef struct
 {
   uint32_t counter;
   uint32_t sign_count;
   uint8_t cred_protect_policy;
+  uint8_t cred_blob_len;
   uint16_t credential_id_len;
   uint16_t user_id_len;
   uint8_t rp_id_hash[FIDO_SHA256_SIZE];
@@ -24,6 +26,7 @@ typedef struct
   uint8_t user_id[64];
   char user_name[64];
   char user_display_name[64];
+  uint8_t cred_blob[FIDO_CRED_BLOB_MAX];
 } fido_store_credential_t;
 
 typedef void (*fido_store_progress_cb_t)(uint16_t current, uint16_t total, void *ctx);
@@ -33,6 +36,8 @@ uint8_t fido_store_register(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                             const char *rp_id,
                             const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                             uint8_t cred_protect_policy,
+                            const uint8_t *cred_blob,
+                            uint8_t cred_blob_len,
                             const uint8_t *user_id,
                             uint16_t user_id_len,
                             const char *user_name,

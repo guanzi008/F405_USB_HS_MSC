@@ -32,6 +32,8 @@
   - `forcePINChange`
 - `credProtect`
 - `hmac-secret`
+- `credBlob`
+- `largeBlobKey`
 - 更完整的 `credMgmt`
   - metadata
   - enumerate RPs
@@ -188,6 +190,13 @@ fido2-assert -G -h -p -i assert_param /dev/hidrawX
 fido2-assert -V -h -i assert_out cred_pub es256
 ```
 
+### largeBlobKey 注册与认证
+
+```bash
+fido2-cred -M -b -i cred_param /dev/hidrawX es256
+fido2-assert -G -b -p -i assert_param /dev/hidrawX
+```
+
 ## 板上交互
 
 - 旋钮：菜单选择
@@ -206,5 +215,6 @@ fido2-assert -V -h -i assert_out cred_pub es256
 ## 已知边界
 
 - Windows Hello 的 `PIN / reset` 管理链已经推进，但“直接作为 Windows 账户登录密钥”的兼容还没有完全收口。
+- `credBlob / largeBlobKey` 已经实现，但 `authenticatorLargeBlobs` 命令面还没补，所以当前 `maxlargeblob` 仍为 `0`。
 - 更完整的 `credMgmt`、更完整的 CTAP2.1 扩展仍在继续补。
 - 当前文档以 Linux 开发和调试流程为主。

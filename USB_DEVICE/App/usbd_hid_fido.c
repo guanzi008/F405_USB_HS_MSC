@@ -403,6 +403,8 @@ static uint8_t fido_build_u2f_register_response(const uint8_t challenge_param[FI
                           NULL,
                           0U,
                           NULL,
+                          0U,
+                          NULL,
                           NULL,
                           &credential) == 0U)
   {

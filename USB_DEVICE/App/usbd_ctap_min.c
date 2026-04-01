@@ -53,6 +53,7 @@
 #define CTAP_HMAC_SECRET_SALT_MAX    64U
 #define CTAP_HMAC_SECRET_AUTH_MAX    32U
 #define CTAP_HMAC_SECRET_OUT_MAX     64U
+#define CTAP_LARGEBLOB_KEY_SIZE      32U
 
 #define CTAP_CRED_MGMT_KEY_SUBCMD       0x01U
 #define CTAP_CRED_MGMT_KEY_PARAMS       0x02U
@@ -119,6 +120,9 @@ typedef struct
   uint8_t cred_protect_present;
   uint8_t cred_protect_policy;
   uint8_t hmac_secret_requested;
+  uint8_t large_blob_key_requested;
+  uint8_t cred_blob[FIDO_CRED_BLOB_MAX];
+  uint8_t cred_blob_len;
   uint8_t has_pin_uv_auth_param;
   uint8_t pin_uv_auth_param[16];
   uint8_t has_pin_uv_auth_protocol;
@@ -142,6 +146,8 @@ typedef struct
   uint8_t option_uv_present;
   uint8_t option_uv;
   uint8_t hmac_secret_requested;
+  uint8_t cred_blob_requested;
+  uint8_t large_blob_key_requested;
   uint8_t hmac_secret_has_key_agreement;
   uint8_t hmac_secret_has_salt_enc;
   uint8_t hmac_secret_has_salt_auth;
@@ -249,6 +255,8 @@ static uint8_t build_cose_public_key(const uint8_t public_key[FIDO_P256_PUBLIC_K
                                      uint8_t *out,
                                      uint16_t out_cap,
                                      uint16_t *out_len);
+static void ctap_build_large_blob_key(const fido_store_credential_t *credential,
+                                      uint8_t out[CTAP_LARGEBLOB_KEY_SIZE]);
 
 static void ctap_diag_note_request(uint8_t cmd,
                                    uint32_t allow_count,
@@ -1200,6 +1208,29 @@ static uint8_t parse_make_credential_extensions(cbor_reader_t *reader,
       }
       parsed->hmac_secret_requested = (uint8_t)(enabled != 0U ? 1U : 0U);
     }
+    else if (cbor_text_eq(&name, "credBlob") != 0U)
+    {
+      cbor_span_t blob;
+
+      if ((cbor_read_bytes(reader, &blob) == 0U) ||
+          (blob.len == 0U) ||
+          (blob.len > sizeof(parsed->cred_blob)))
+      {
+        return 0U;
+      }
+      memcpy(parsed->cred_blob, blob.ptr, blob.len);
+      parsed->cred_blob_len = (uint8_t)blob.len;
+    }
+    else if (cbor_text_eq(&name, "largeBlobKey") != 0U)
+    {
+      uint8_t enabled = 0U;
+
+      if (cbor_read_bool(reader, &enabled) == 0U)
+      {
+        return 0U;
+      }
+      parsed->large_blob_key_requested = (uint8_t)(enabled != 0U ? 1U : 0U);
+    }
     else if (cbor_skip_item(reader) == 0U)
     {
       return 0U;
@@ -1326,6 +1357,26 @@ static uint8_t parse_get_assertion_extensions(cbor_reader_t *reader,
       {
         return 0U;
       }
+    }
+    else if (cbor_text_eq(&name, "credBlob") != 0U)
+    {
+      uint8_t enabled = 0U;
+
+      if (cbor_read_bool(reader, &enabled) == 0U)
+      {
+        return 0U;
+      }
+      parsed->cred_blob_requested = (uint8_t)(enabled != 0U ? 1U : 0U);
+    }
+    else if (cbor_text_eq(&name, "largeBlobKey") != 0U)
+    {
+      uint8_t enabled = 0U;
+
+      if (cbor_read_bool(reader, &enabled) == 0U)
+      {
+        return 0U;
+      }
+      parsed->large_blob_key_requested = (uint8_t)(enabled != 0U ? 1U : 0U);
     }
     else if (cbor_skip_item(reader) == 0U)
     {
@@ -2946,9 +2997,10 @@ static uint8_t build_credman_rk_response(const fido_store_credential_t *credenti
                                          uint16_t *resp_len)
 {
   uint8_t cose_key[128];
+  uint8_t large_blob_key[CTAP_LARGEBLOB_KEY_SIZE];
   uint16_t cose_key_len = 0U;
   uint16_t off = 1U;
-  uint8_t field_count = 3U;
+  uint8_t field_count = 4U;
 
   if ((credential == NULL) || (resp == NULL) || (resp_len == NULL))
   {
@@ -2958,6 +3010,7 @@ static uint8_t build_credman_rk_response(const fido_store_credential_t *credenti
   {
     return 0U;
   }
+  ctap_build_large_blob_key(credential, large_blob_key);
   if (include_total != 0U)
   {
     field_count = (uint8_t)(field_count + 1U);
@@ -2987,6 +3040,11 @@ static uint8_t build_credman_rk_response(const fido_store_credential_t *credenti
   if ((credential->cred_protect_policy != 0U) &&
       ((cbor_write_uint(10U, resp, resp_cap, &off) == 0U) ||
        (cbor_write_uint(credential->cred_protect_policy, resp, resp_cap, &off) == 0U)))
+  {
+    return 0U;
+  }
+  if ((cbor_write_uint(11U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bytes(large_blob_key, sizeof(large_blob_key), resp, resp_cap, &off) == 0U))
   {
     return 0U;
   }
@@ -3249,6 +3307,31 @@ static void ctap_build_hmac_secret_seed(const fido_store_credential_t *credentia
                           out);
 }
 
+static void ctap_build_large_blob_key(const fido_store_credential_t *credential,
+                                      uint8_t out[CTAP_LARGEBLOB_KEY_SIZE])
+{
+  static const uint8_t k_label[] = "largeBlobKey-v1";
+  uint8_t material[sizeof(k_label) - 1U + FIDO_CREDENTIAL_ID_SIZE + FIDO_SHA256_SIZE];
+  uint16_t off = 0U;
+
+  if ((credential == NULL) || (out == NULL))
+  {
+    return;
+  }
+
+  memcpy(&material[off], k_label, sizeof(k_label) - 1U);
+  off = (uint16_t)(off + (sizeof(k_label) - 1U));
+  memcpy(&material[off], credential->credential_id, credential->credential_id_len);
+  off = (uint16_t)(off + credential->credential_id_len);
+  memcpy(&material[off], credential->rp_id_hash, FIDO_SHA256_SIZE);
+  off = (uint16_t)(off + FIDO_SHA256_SIZE);
+  fido_crypto_hmac_sha256(credential->private_key,
+                          FIDO_P256_PRIVATE_KEY_SIZE,
+                          material,
+                          off,
+                          out);
+}
+
 static uint8_t ctap_build_hmac_secret_response(const ctap_get_assertion_req_t *parsed,
                                                const fido_store_credential_t *credential,
                                                uint8_t *enc_out,
@@ -3329,6 +3412,7 @@ static uint8_t ctap_build_hmac_secret_response(const ctap_get_assertion_req_t *p
 static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
                                                const fido_store_credential_t *credential,
                                                uint8_t include_cred_protect_ext,
+                                               uint8_t include_cred_blob_ext,
                                                uint8_t include_hmac_secret_ext,
                                                uint8_t *auth_data,
                                                uint16_t auth_cap,
@@ -3338,7 +3422,7 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
       0x55U, 0x4CU, 0x54U, 0x52U, 0x41U, 0x4CU, 0x49U, 0x4EU,
       0x4BU, 0x2DU, 0x46U, 0x34U, 0x30U, 0x35U, 0x02U, 0x00U};
   uint8_t cose_key[96];
-  uint8_t ext_data[48];
+  uint8_t ext_data[96];
   uint16_t cose_key_len;
   uint16_t ext_len = 0U;
   uint8_t ext_count = 0U;
@@ -3360,6 +3444,10 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
   {
     ext_count = (uint8_t)(ext_count + 1U);
   }
+  if (include_cred_blob_ext != 0U)
+  {
+    ext_count = (uint8_t)(ext_count + 1U);
+  }
   if ((ext_count != 0U) &&
       (cbor_write_map(ext_count, ext_data, sizeof(ext_data), &ext_len) == 0U))
   {
@@ -3373,6 +3461,12 @@ static uint8_t build_make_credential_auth_data(const uint8_t rp_id_hash[FIDO_SHA
   }
   if ((include_hmac_secret_ext != 0U) &&
       ((cbor_write_text("hmac-secret", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
+       (cbor_write_bool(1U, ext_data, sizeof(ext_data), &ext_len) == 0U)))
+  {
+    return 0U;
+  }
+  if ((include_cred_blob_ext != 0U) &&
+      ((cbor_write_text("credBlob", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
        (cbor_write_bool(1U, ext_data, sizeof(ext_data), &ext_len) == 0U)))
   {
     return 0U;
@@ -3410,15 +3504,19 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
                                               const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                                               const fido_store_credential_t *credential,
                                               uint8_t include_cred_protect_ext,
+                                              uint8_t include_cred_blob_ext,
                                               uint8_t include_hmac_secret_ext,
+                                              uint8_t include_large_blob_key,
                                               uint8_t *resp,
                                               uint16_t resp_cap,
                                               uint16_t *resp_len)
 {
   uint8_t auth_data[256];
+  uint8_t large_blob_key[CTAP_LARGEBLOB_KEY_SIZE];
   uint8_t signature[80];
   uint16_t auth_len;
   uint16_t signature_len = 0U;
+  uint8_t map_count = 3U;
   uint16_t off = 0U;
 
   if ((client_data_hash == NULL) || (resp == NULL) || (resp_len == NULL))
@@ -3428,6 +3526,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   if (build_make_credential_auth_data(rp_id_hash,
                                       credential,
                                       include_cred_protect_ext,
+                                      include_cred_blob_ext,
                                       include_hmac_secret_ext,
                                       auth_data,
                                       sizeof(auth_data),
@@ -3445,9 +3544,14 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   {
     return 0U;
   }
+  if (include_large_blob_key != 0U)
+  {
+    ctap_build_large_blob_key(credential, large_blob_key);
+    map_count = 4U;
+  }
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map(3U, resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(map_count, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("packed", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
@@ -3458,6 +3562,12 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
       (cbor_write_nint(-7, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("sig", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
+  {
+    return 0U;
+  }
+  if ((include_large_blob_key != 0U) &&
+      ((cbor_write_uint(0x05U, resp, resp_cap, &off) == 0U) ||
+       (cbor_write_bytes(large_blob_key, sizeof(large_blob_key), resp, resp_cap, &off) == 0U)))
   {
     return 0U;
   }
@@ -3476,14 +3586,17 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
                                             uint16_t resp_cap,
                                             uint16_t *resp_len)
 {
-  uint8_t auth_data[160];
-  uint8_t ext_data[96];
+  uint8_t auth_data[256];
+  uint8_t ext_data[160];
   uint8_t hmac_secret_enc[CTAP_HMAC_SECRET_OUT_MAX];
+  uint8_t large_blob_key[CTAP_LARGEBLOB_KEY_SIZE];
   uint8_t signature[80];
   uint16_t auth_data_len = 37U;
   uint16_t ext_len = 0U;
   uint16_t hmac_secret_len = 0U;
   uint16_t signature_len = 0U;
+  uint8_t ext_count = 0U;
+  uint8_t map_count = 3U;
   uint16_t off = 0U;
   uint32_t next_sign_count;
 
@@ -3498,18 +3611,40 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   memset(hmac_secret_enc, 0, sizeof(hmac_secret_enc));
 
   if ((parsed->hmac_secret_requested != 0U) &&
-      ((ctap_build_hmac_secret_response(parsed,
-                                        credential,
-                                        hmac_secret_enc,
-                                        sizeof(hmac_secret_enc),
-                                        &hmac_secret_len) == 0U) ||
-       (cbor_write_map(1U, ext_data, sizeof(ext_data), &ext_len) == 0U)))
+      (ctap_build_hmac_secret_response(parsed,
+                                       credential,
+                                       hmac_secret_enc,
+                                       sizeof(hmac_secret_enc),
+                                       &hmac_secret_len) == 0U))
+  {
+    return 0U;
+  }
+  if (parsed->hmac_secret_requested != 0U)
+  {
+    ext_count = (uint8_t)(ext_count + 1U);
+  }
+  if (parsed->cred_blob_requested != 0U)
+  {
+    ext_count = (uint8_t)(ext_count + 1U);
+  }
+  if ((ext_count != 0U) &&
+      (cbor_write_map(ext_count, ext_data, sizeof(ext_data), &ext_len) == 0U))
   {
     return 0U;
   }
   if ((parsed->hmac_secret_requested != 0U) &&
       ((cbor_write_text("hmac-secret", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
        (cbor_write_bytes(hmac_secret_enc, hmac_secret_len, ext_data, sizeof(ext_data), &ext_len) == 0U)))
+  {
+    return 0U;
+  }
+  if ((parsed->cred_blob_requested != 0U) &&
+      ((cbor_write_text("credBlob", ext_data, sizeof(ext_data), &ext_len) == 0U) ||
+       (cbor_write_bytes(credential->cred_blob,
+                         credential->cred_blob_len,
+                         ext_data,
+                         sizeof(ext_data),
+                         &ext_len) == 0U)))
   {
     return 0U;
   }
@@ -3535,9 +3670,14 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
   {
     return 0U;
   }
+  if (parsed->large_blob_key_requested != 0U)
+  {
+    ctap_build_large_blob_key(credential, large_blob_key);
+    map_count = 4U;
+  }
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map(3U, resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(map_count, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
       /* CTAP canonical CBOR requires shorter text keys first: "id" before "type". */
@@ -3553,6 +3693,12 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
       (cbor_write_bytes(auth_data, auth_data_len, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
+  {
+    return 0U;
+  }
+  if ((parsed->large_blob_key_requested != 0U) &&
+      ((cbor_write_uint(0x07U, resp, resp_cap, &off) == 0U) ||
+       (cbor_write_bytes(large_blob_key, sizeof(large_blob_key), resp, resp_cap, &off) == 0U)))
   {
     return 0U;
   }
@@ -3588,16 +3734,18 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
   (void)fido_store_client_pin_get_force_change(&force_pin_change);
 
   resp[off++] = CTAP_STATUS_OK;
-  if ((cbor_write_map(9U, resp, resp_cap, &off) == 0U) ||
+  if ((cbor_write_map(10U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_array(3U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("U2F_V2", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("FIDO_2_0", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("FIDO_2_1_PRE", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_array(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array(4U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("credProtect", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("hmac-secret", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("credBlob", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("largeBlobKey", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
@@ -3627,6 +3775,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_bool(force_pin_change != 0U ? 1U : 0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x0DU, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(min_pin_length, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x0FU, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(FIDO_CRED_BLOB_MAX, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x1FU, resp, resp_cap, &off) == 0U) ||
       (cbor_write_array(2U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(CTAP_CONFIG_SUBCMD_ALWAYS_UV, resp, resp_cap, &off) == 0U) ||
@@ -4378,6 +4528,8 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                              parsed.rp_id,
                              parsed.client_data_hash,
                              cred_protect_policy,
+                             parsed.cred_blob,
+                             parsed.cred_blob_len,
                              parsed.user_id,
                              parsed.user_id_len,
                              parsed.user_name,
@@ -4387,7 +4539,9 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                         parsed.client_data_hash,
                                         &credential,
                                         (uint8_t)(cred_protect_policy != 0U),
+                                        (uint8_t)(parsed.cred_blob_len != 0U),
                                         parsed.hmac_secret_requested,
+                                        parsed.large_blob_key_requested,
                                         resp,
                                         resp_cap,
                                         resp_len) == 0U))
