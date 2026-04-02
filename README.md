@@ -20,6 +20,7 @@
 - `webauthn.io` 注册与认证
 - `CTAP1/U2F VERSION / REGISTER / AUTHENTICATE`
 - `CTAP2 makeCredential / getAssertion`
+- `CTAP2 getNextAssertion`
 - `ClientPIN`
   - `getRetries`
   - `getKeyAgreement`

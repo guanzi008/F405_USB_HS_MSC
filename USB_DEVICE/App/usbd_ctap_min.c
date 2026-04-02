@@ -274,8 +274,15 @@ static uint8_t s_ctap_pending_cmd;
 static uint8_t s_ctap_ui_state;
 static uint8_t s_ctap_selection_count;
 static uint8_t s_ctap_selection_index;
+static uint8_t s_ctap_next_assertion_active;
+static uint8_t s_ctap_next_assertion_index;
+static uint8_t s_ctap_next_assertion_count;
+static uint8_t s_ctap_next_assertion_pin_uv_verified;
+static uint8_t s_ctap_next_assertion_user_present;
 static fido_store_credential_t s_ctap_candidates[CTAP_GA_ALLOW_LIST_MAX];
 static uint32_t s_ctap_candidate_slots[CTAP_GA_ALLOW_LIST_MAX];
+static ctap_get_assertion_req_t s_ctap_next_assertion_req;
+static uint8_t s_ctap_next_assertion_rp_id_hash[FIDO_SHA256_SIZE];
 static uint8_t s_ctap_recent_cmd;
 static uint32_t s_ctap_recent_approved_at_ms;
 static uint8_t s_ctap_recent_req_hash[FIDO_SHA256_SIZE];
@@ -3864,6 +3871,60 @@ static uint8_t ctap_collect_assertion_candidates(const uint8_t *req,
   return s_ctap_selection_count;
 }
 
+static void ctap_reset_next_assertion_state(void)
+{
+  s_ctap_next_assertion_active = 0U;
+  s_ctap_next_assertion_index = 0U;
+  s_ctap_next_assertion_count = 0U;
+  s_ctap_next_assertion_pin_uv_verified = 0U;
+  s_ctap_next_assertion_user_present = 0U;
+  memset(&s_ctap_next_assertion_req, 0, sizeof(s_ctap_next_assertion_req));
+  memset(s_ctap_next_assertion_rp_id_hash, 0, sizeof(s_ctap_next_assertion_rp_id_hash));
+}
+
+static void ctap_promote_selected_candidate_to_front(void)
+{
+  fido_store_credential_t credential_tmp;
+  uint32_t slot_tmp;
+
+  if ((s_ctap_selection_count == 0U) || (s_ctap_selection_index == 0U) ||
+      (s_ctap_selection_index >= s_ctap_selection_count))
+  {
+    return;
+  }
+
+  credential_tmp = s_ctap_candidates[0];
+  s_ctap_candidates[0] = s_ctap_candidates[s_ctap_selection_index];
+  s_ctap_candidates[s_ctap_selection_index] = credential_tmp;
+
+  slot_tmp = s_ctap_candidate_slots[0];
+  s_ctap_candidate_slots[0] = s_ctap_candidate_slots[s_ctap_selection_index];
+  s_ctap_candidate_slots[s_ctap_selection_index] = slot_tmp;
+
+  s_ctap_selection_index = 0U;
+}
+
+static void ctap_start_next_assertion(const ctap_get_assertion_req_t *parsed,
+                                      const uint8_t rp_id_hash[FIDO_SHA256_SIZE],
+                                      uint8_t pin_uv_verified,
+                                      uint8_t user_present)
+{
+  if ((parsed == NULL) || (rp_id_hash == NULL) || (s_ctap_selection_count <= 1U))
+  {
+    ctap_reset_next_assertion_state();
+    return;
+  }
+
+  ctap_promote_selected_candidate_to_front();
+  s_ctap_next_assertion_active = 1U;
+  s_ctap_next_assertion_index = 1U;
+  s_ctap_next_assertion_count = s_ctap_selection_count;
+  s_ctap_next_assertion_pin_uv_verified = pin_uv_verified;
+  s_ctap_next_assertion_user_present = user_present;
+  s_ctap_next_assertion_req = *parsed;
+  memcpy(s_ctap_next_assertion_rp_id_hash, rp_id_hash, FIDO_SHA256_SIZE);
+}
+
 static uint8_t build_cose_public_key(const uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE],
                                      uint8_t *out,
                                      uint16_t out_cap,
@@ -4200,6 +4261,9 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
                                             const uint8_t client_data_hash[FIDO_SHA256_SIZE],
                                             uint8_t user_present,
                                             uint8_t user_verified,
+                                            uint8_t include_user,
+                                            uint8_t include_total,
+                                            uint8_t total_count,
                                             uint8_t *resp,
                                             uint16_t resp_cap,
                                             uint16_t *resp_len)
@@ -4294,6 +4358,14 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
     ctap_build_large_blob_key(credential, large_blob_key);
     map_count = 4U;
   }
+  if ((include_user != 0U) && (credential->user_id_len != 0U))
+  {
+    map_count = (uint8_t)(map_count + 1U);
+  }
+  if (include_total != 0U)
+  {
+    map_count = (uint8_t)(map_count + 1U);
+  }
 
   resp[off++] = CTAP_STATUS_OK;
   if ((cbor_write_map(map_count, resp, resp_cap, &off) == 0U) ||
@@ -4312,6 +4384,19 @@ static uint8_t build_get_assertion_response(const uint8_t rp_id_hash[FIDO_SHA256
       (cbor_write_bytes(auth_data, auth_data_len, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
+  {
+    return 0U;
+  }
+  if ((include_user != 0U) &&
+      (credential->user_id_len != 0U) &&
+      ((cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
+       (cbor_write_user_entity(credential, resp, resp_cap, &off) == 0U)))
+  {
+    return 0U;
+  }
+  if ((include_total != 0U) &&
+      ((cbor_write_uint(0x05U, resp, resp_cap, &off) == 0U) ||
+       (cbor_write_uint(total_count, resp, resp_cap, &off) == 0U)))
   {
     return 0U;
   }
@@ -5166,6 +5251,14 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
 
     credential = s_ctap_candidates[s_ctap_selection_index];
     slot_index = s_ctap_candidate_slots[s_ctap_selection_index];
+    if (match_count > 1U)
+    {
+      ctap_start_next_assertion(&parsed, rp_id_hash, pin_uv_verified, 0U);
+    }
+    else
+    {
+      ctap_reset_next_assertion_state();
+    }
     s_ctap_ui_state = USBD_CTAP_UI_IDLE;
     s_ctap_pending_cmd = 0U;
     s_ctap_selection_count = 0U;
@@ -5177,10 +5270,14 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
                                      parsed.client_data_hash,
                                      0U,
                                      pin_uv_verified,
+                                     (uint8_t)(parsed.allow_credential_total == 0U ? 1U : 0U),
+                                     (uint8_t)(match_count > 1U ? 1U : 0U),
+                                     match_count,
                                      resp,
                                      resp_cap,
                                      resp_len) == 0U)
     {
+      ctap_reset_next_assertion_state();
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
     }
     ctap_diag_note_status(CTAP_STATUS_OK);
@@ -5196,6 +5293,61 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
   return USBD_CTAP_MIN_PENDING;
 }
 
+static uint8_t usbd_ctap_min_handle_get_next_assertion(const uint8_t *req,
+                                                       uint16_t req_len,
+                                                       uint8_t *resp,
+                                                       uint16_t resp_cap,
+                                                       uint16_t *resp_len)
+{
+  fido_store_credential_t credential;
+  uint32_t slot_index = 0U;
+  uint8_t index;
+
+  ctap_diag_note_request(CTAP_CMD_GET_NEXT_ASSERTION, 0U, 0U, 0U);
+
+  if ((req == NULL) || (req_len != 1U))
+  {
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+  }
+  if ((s_ctap_next_assertion_active == 0U) ||
+      (s_ctap_next_assertion_index >= s_ctap_next_assertion_count))
+  {
+    ctap_reset_next_assertion_state();
+    return usbd_ctap_min_error(CTAP_ERR_NOT_ALLOWED, resp, resp_cap, resp_len);
+  }
+
+  index = s_ctap_next_assertion_index;
+  credential = s_ctap_candidates[index];
+  slot_index = s_ctap_candidate_slots[index];
+
+  if (build_get_assertion_response(s_ctap_next_assertion_rp_id_hash,
+                                   &s_ctap_next_assertion_req,
+                                   &credential,
+                                   slot_index,
+                                   s_ctap_next_assertion_req.client_data_hash,
+                                   s_ctap_next_assertion_user_present,
+                                   s_ctap_next_assertion_pin_uv_verified,
+                                   (uint8_t)(s_ctap_next_assertion_req.allow_credential_total == 0U ? 1U : 0U),
+                                   0U,
+                                   0U,
+                                   resp,
+                                   resp_cap,
+                                   resp_len) == 0U)
+  {
+    ctap_reset_next_assertion_state();
+    return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+  }
+
+  s_ctap_next_assertion_index = (uint8_t)(s_ctap_next_assertion_index + 1U);
+  if (s_ctap_next_assertion_index >= s_ctap_next_assertion_count)
+  {
+    ctap_reset_next_assertion_state();
+  }
+
+  ctap_diag_note_status(CTAP_STATUS_OK);
+  return USBD_CTAP_MIN_DONE;
+}
+
 uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
                                   uint16_t req_len,
                                   uint8_t *resp,
@@ -5207,6 +5359,11 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
   if ((req == NULL) || (req_len == 0U) || (resp == NULL) || (resp_len == NULL))
   {
     return 0U;
+  }
+
+  if (req[0] != CTAP_CMD_GET_NEXT_ASSERTION)
+  {
+    ctap_reset_next_assertion_state();
   }
 
   switch (req[0])
@@ -5225,6 +5382,14 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
 
     case CTAP_CMD_GET_ASSERTION:
       return usbd_ctap_min_handle_get_assertion(req, req_len, resp, resp_cap, resp_len);
+
+    case CTAP_CMD_GET_NEXT_ASSERTION:
+      s_ctap_ui_state = USBD_CTAP_UI_IDLE;
+      s_ctap_pending_cmd = 0U;
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
+      ctap_credman_reset_state();
+      return usbd_ctap_min_handle_get_next_assertion(req, req_len, resp, resp_cap, resp_len);
 
     case CTAP_CMD_CLIENT_PIN:
       s_ctap_ui_state = USBD_CTAP_UI_IDLE;
@@ -5409,6 +5574,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
         (parsed.has_client_data_hash == 0U) ||
         (parsed.has_rp_id == 0U))
     {
+      ctap_reset_next_assertion_state();
       return usbd_ctap_min_error(CTAP_ERR_INVALID_CBOR, resp, resp_cap, resp_len);
     }
 
@@ -5459,8 +5625,20 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
 
       if (matched == 0U)
       {
+        ctap_reset_next_assertion_state();
         return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
       }
+    }
+
+    if (s_ctap_selection_count > 1U)
+    {
+      ctap_start_next_assertion(&parsed, rp_id_hash, pin_uv_verified, 1U);
+      credential = s_ctap_candidates[0];
+      slot_index = s_ctap_candidate_slots[0];
+    }
+    else
+    {
+      ctap_reset_next_assertion_state();
     }
 
     if (build_get_assertion_response(rp_id_hash,
@@ -5470,10 +5648,14 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                      parsed.client_data_hash,
                                      1U,
                                      pin_uv_verified,
+                                     (uint8_t)(parsed.allow_credential_total == 0U ? 1U : 0U),
+                                     (uint8_t)(s_ctap_next_assertion_active != 0U ? 1U : 0U),
+                                     s_ctap_selection_count,
                                      resp,
                                      resp_cap,
                                      resp_len) == 0U)
     {
+      ctap_reset_next_assertion_state();
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
     }
     if (pin_uv_verified != 0U)
