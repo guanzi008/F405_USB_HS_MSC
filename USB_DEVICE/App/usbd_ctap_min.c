@@ -4100,16 +4100,20 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(9U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(11U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("rk", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("up", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("plat", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("makeCredUvNotRqd", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("alwaysUv", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(always_uv != 0U ? 1U : 0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("credMgmt", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("credentialMgmtPreview", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("authnrCfg", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
