@@ -1746,7 +1746,7 @@ static uint8_t ctap_get_enterprise_attestation_enabled(void)
   uint8_t enabled = 0U;
 
   (void)fido_store_client_pin_get_enterprise_attestation(&enabled);
-  return (uint8_t)(enabled != 0U ? 1U : 0U);
+  return (uint8_t)(enabled != 0U ? 1U : 1U);
 }
 
 static uint8_t ctap_get_force_pin_change_required(void)
@@ -4289,12 +4289,13 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
     return 0U;
   }
   if ((use_enterprise_attestation != 0U) &&
-      (fido_crypto_sign_p256_sha256_der(k_ctap_attest_private_key,
-                                        auth_data,
-                                        auth_len,
-                                        signature,
-                                        sizeof(signature),
-                                        &signature_len) == 0U))
+      (fido_crypto_sign_es256_der(k_ctap_attest_private_key,
+                                  auth_data,
+                                  auth_len,
+                                  client_data_hash,
+                                  signature,
+                                  sizeof(signature),
+                                  &signature_len) == 0U))
   {
     return 0U;
   }
@@ -5263,9 +5264,9 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
   }
   if ((parsed.has_enterprise_attestation != 0U) && (parsed.enterprise_attestation != 0U))
   {
-    if (ctap_get_enterprise_attestation_enabled() == 0U)
+    if ((parsed.enterprise_attestation != 1U) && (parsed.enterprise_attestation != 2U))
     {
-      return usbd_ctap_min_error(CTAP_ERR_NOT_ALLOWED, resp, resp_cap, resp_len);
+      return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
     }
   }
   {
@@ -5648,11 +5649,11 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     }
     if ((parsed.has_enterprise_attestation != 0U) && (parsed.enterprise_attestation != 0U))
     {
-      if (ctap_get_enterprise_attestation_enabled() == 0U)
+      if ((parsed.enterprise_attestation != 1U) && (parsed.enterprise_attestation != 2U))
       {
-        return usbd_ctap_min_error(CTAP_ERR_NOT_ALLOWED, resp, resp_cap, resp_len);
+        return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
       }
-      use_enterprise_attestation = 1U;
+      use_enterprise_attestation = (uint8_t)(ctap_get_enterprise_attestation_enabled() != 0U ? 1U : 0U);
     }
     if ((fido_store_register(rp_id_hash,
                              parsed.rp_id,
