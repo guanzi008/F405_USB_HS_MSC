@@ -526,6 +526,7 @@ static uint8_t fido_complete_u2f_pending(usbd_hid_fido_state_t *state,
   if (state->pending_msg_len != 0U)
   {
     state->rx_expected_len = state->pending_msg_len;
+    memcpy(state->rx_buf, state->pending_buf, state->pending_msg_len);
   }
   if (fido_parse_u2f_apdu(state, &apdu) == 0U)
   {
@@ -581,6 +582,36 @@ static uint8_t fido_complete_u2f_pending(usbd_hid_fido_state_t *state,
   return 0U;
 }
 
+static void fido_capture_pending(usbd_hid_fido_state_t *state, uint8_t cmd)
+{
+  if (state == NULL)
+  {
+    return;
+  }
+
+  state->pending_cmd = cmd;
+  state->pending_cid = state->rx_cid;
+  if (state->rx_expected_len != 0U)
+  {
+    memcpy(state->pending_buf, state->rx_buf, state->rx_expected_len);
+  }
+}
+
+static void fido_clear_pending(usbd_hid_fido_state_t *state)
+{
+  if (state == NULL)
+  {
+    return;
+  }
+
+  state->wait_user_presence = 0U;
+  state->pending_req_valid = 0U;
+  state->pending_cbor_len = 0U;
+  state->pending_msg_len = 0U;
+  state->pending_cid = 0U;
+  state->pending_cmd = 0U;
+}
+
 static void fido_process_u2f_message(usbd_hid_fido_state_t *state)
 {
   fido_u2f_apdu_t apdu;
@@ -626,6 +657,7 @@ static void fido_process_u2f_message(usbd_hid_fido_state_t *state)
       state->wait_user_presence = 1U;
       state->pending_msg_len = state->rx_expected_len;
       state->pending_req_valid = 1U;
+      fido_capture_pending(state, FIDO_HID_CMD_MSG);
       fido_crypto_sha256(state->rx_buf, state->rx_expected_len, state->pending_req_hash);
       usbd_ctap_min_begin_external_wait(CTAP_CMD_MAKE_CREDENTIAL);
       state->last_keepalive_ms = HAL_GetTick();
@@ -680,6 +712,7 @@ static void fido_process_u2f_message(usbd_hid_fido_state_t *state)
       state->wait_user_presence = 1U;
       state->pending_msg_len = state->rx_expected_len;
       state->pending_req_valid = 1U;
+      fido_capture_pending(state, FIDO_HID_CMD_MSG);
       fido_crypto_sha256(state->rx_buf, state->rx_expected_len, state->pending_req_hash);
       usbd_ctap_min_begin_external_wait(CTAP_CMD_GET_ASSERTION);
       state->last_keepalive_ms = HAL_GetTick();
@@ -734,6 +767,15 @@ static void fido_process_message(usbd_hid_fido_state_t *state)
     return;
   }
 
+  if (state->rx_cmd == FIDO_HID_CMD_CANCEL)
+  {
+    if ((state->wait_user_presence != 0U) && (state->rx_cid == state->pending_cid))
+    {
+      usbd_ctap_min_note_user_denied();
+    }
+    return;
+  }
+
   if (state->rx_cmd == FIDO_HID_CMD_MSG)
   {
     if ((state->wait_user_presence != 0U) && (fido_is_same_pending_u2f(state) != 0U))
@@ -785,6 +827,7 @@ static void fido_process_message(usbd_hid_fido_state_t *state)
       {
         state->wait_user_presence = 1U;
         state->pending_cbor_len = state->rx_expected_len;
+        fido_capture_pending(state, FIDO_HID_CMD_CBOR);
         fido_crypto_sha256(state->rx_buf, state->rx_expected_len, state->pending_req_hash);
         state->pending_req_valid = 1U;
         state->last_keepalive_ms = HAL_GetTick();
@@ -962,42 +1005,39 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
       return 0U;
     }
 
-    if (state->rx_cmd == FIDO_HID_CMD_CBOR)
+    if (state->pending_cmd == FIDO_HID_CMD_CBOR)
     {
-      if (usbd_ctap_min_complete_pending(state->rx_buf,
+      if (usbd_ctap_min_complete_pending(state->pending_buf,
                                          state->pending_cbor_len,
                                          1U,
                                          state->tx_buf,
                                          (uint16_t)sizeof(state->tx_buf),
                                          &resp_len) == 0U)
       {
-        fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+        fido_queue_error(state, state->pending_cid, FIDO_HID_ERR_OTHER);
       }
       else
       {
-        fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
+        fido_start_tx(state, state->pending_cid, FIDO_HID_CMD_CBOR, resp_len);
       }
     }
-    else if (state->rx_cmd == FIDO_HID_CMD_MSG)
+    else if (state->pending_cmd == FIDO_HID_CMD_MSG)
     {
       if (fido_complete_u2f_pending(state, 1U, &resp_len) == 0U)
       {
-        fido_u2f_reply_status(state, state->rx_cid, U2F_SW_WRONG_DATA);
+        fido_u2f_reply_status(state, state->pending_cid, U2F_SW_WRONG_DATA);
       }
       else
       {
-        fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_MSG, resp_len);
+        fido_start_tx(state, state->pending_cid, FIDO_HID_CMD_MSG, resp_len);
       }
       usbd_ctap_min_finish_external_wait();
     }
     else
     {
-      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+      fido_queue_error(state, state->pending_cid, FIDO_HID_ERR_OTHER);
     }
-    state->wait_user_presence = 0U;
-    state->pending_req_valid = 0U;
-    state->pending_cbor_len = 0U;
-    state->pending_msg_len = 0U;
+    fido_clear_pending(state);
   }
   else if (ui.ui_state == USBD_CTAP_UI_DENIED)
   {
@@ -1013,42 +1053,39 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
       return 0U;
     }
 
-    if (state->rx_cmd == FIDO_HID_CMD_CBOR)
+    if (state->pending_cmd == FIDO_HID_CMD_CBOR)
     {
-      if (usbd_ctap_min_complete_pending(state->rx_buf,
+      if (usbd_ctap_min_complete_pending(state->pending_buf,
                                          state->pending_cbor_len,
                                          0U,
                                          state->tx_buf,
                                          (uint16_t)sizeof(state->tx_buf),
                                          &resp_len) == 0U)
       {
-        fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+        fido_queue_error(state, state->pending_cid, FIDO_HID_ERR_OTHER);
       }
       else
       {
-        fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_CBOR, resp_len);
+        fido_start_tx(state, state->pending_cid, FIDO_HID_CMD_CBOR, resp_len);
       }
     }
-    else if (state->rx_cmd == FIDO_HID_CMD_MSG)
+    else if (state->pending_cmd == FIDO_HID_CMD_MSG)
     {
       if (fido_complete_u2f_pending(state, 0U, &resp_len) == 0U)
       {
-        fido_u2f_reply_status(state, state->rx_cid, U2F_SW_CONDITIONS_NOT_SATISFIED);
+        fido_u2f_reply_status(state, state->pending_cid, U2F_SW_CONDITIONS_NOT_SATISFIED);
       }
       else
       {
-        fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_MSG, resp_len);
+        fido_start_tx(state, state->pending_cid, FIDO_HID_CMD_MSG, resp_len);
       }
       usbd_ctap_min_finish_external_wait();
     }
     else
     {
-      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_OTHER);
+      fido_queue_error(state, state->pending_cid, FIDO_HID_ERR_OTHER);
     }
-    state->wait_user_presence = 0U;
-    state->pending_req_valid = 0U;
-    state->pending_cbor_len = 0U;
-    state->pending_msg_len = 0U;
+    fido_clear_pending(state);
   }
   else if (state->tx_active != 0U)
   {
@@ -1058,7 +1095,7 @@ uint16_t usbd_hid_fido_service(USBD_HandleTypeDef *pdev,
   {
     state->last_keepalive_ms = now_ms;
     state->tx_buf[0] = FIDO_HID_KEEPALIVE_UPNEEDED;
-    fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
+    fido_start_tx(state, state->pending_cid, FIDO_HID_CMD_KEEPALIVE, 1U);
   }
 
   return fido_emit_tx_packet(state, response, response_cap);

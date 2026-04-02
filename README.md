@@ -21,6 +21,7 @@
 - `CTAP1/U2F VERSION / REGISTER / AUTHENTICATE`
 - `CTAP2 makeCredential / getAssertion`
 - `CTAP2 getNextAssertion`
+- `CTAPHID CANCEL`
 - `ClientPIN`
   - `getRetries`
   - `getKeyAgreement`

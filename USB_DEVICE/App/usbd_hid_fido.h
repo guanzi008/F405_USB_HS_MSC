@@ -51,8 +51,11 @@ typedef struct
   uint8_t pending_req_valid;
   uint16_t pending_cbor_len;
   uint16_t pending_msg_len;
+  uint32_t pending_cid;
+  uint8_t pending_cmd;
   uint32_t last_keepalive_ms;
   uint8_t pending_req_hash[FIDO_SHA256_SIZE];
+  uint8_t pending_buf[FIDO_HID_MSG_MAX];
   uint8_t rx_buf[FIDO_HID_MSG_MAX];
   uint8_t tx_buf[FIDO_HID_MSG_MAX];
 } usbd_hid_fido_state_t;
