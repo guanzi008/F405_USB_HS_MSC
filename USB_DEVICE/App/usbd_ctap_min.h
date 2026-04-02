@@ -34,6 +34,7 @@
 #define CTAP_ERR_PIN_NOT_SET           0x35U
 #define CTAP_ERR_PIN_REQUIRED          0x36U
 #define CTAP_ERR_PIN_POLICY_VIOLATION  0x37U
+#define CTAP_ERR_UNAUTHORIZED_PERMISSION 0x40U
 #define CTAP_ERR_INTERNAL              0x7FU
 
 #define USBD_CTAP_MIN_DONE             0x01U

@@ -34,16 +34,23 @@
 #define CTAP_PIN_KEY_PIN_AUTH        0x04U
 #define CTAP_PIN_KEY_NEW_PIN_ENC     0x05U
 #define CTAP_PIN_KEY_PIN_HASH_ENC    0x06U
+#define CTAP_PIN_KEY_PERMISSIONS     0x09U
+#define CTAP_PIN_KEY_RP_ID           0x0AU
 
 #define CTAP_PIN_SUBCMD_GET_RETRIES       0x01U
 #define CTAP_PIN_SUBCMD_GET_KEY_AGREEMENT 0x02U
 #define CTAP_PIN_SUBCMD_SET_PIN           0x03U
 #define CTAP_PIN_SUBCMD_CHANGE_PIN        0x04U
 #define CTAP_PIN_SUBCMD_GET_PIN_TOKEN     0x05U
+#define CTAP_PIN_SUBCMD_GET_TOKEN_USING_UV 0x06U
+#define CTAP_PIN_SUBCMD_GET_UV_RETRIES    0x07U
+#define CTAP_PIN_SUBCMD_GET_TOKEN_USING_PIN 0x09U
 
 #define CTAP_PIN_RESP_KEY_AGREEMENT  0x01U
 #define CTAP_PIN_RESP_KEY_PIN_TOKEN  0x02U
 #define CTAP_PIN_RESP_KEY_RETRIES    0x03U
+#define CTAP_PIN_RESP_KEY_POWER_CYCLE_STATE 0x04U
+#define CTAP_PIN_RESP_KEY_UV_RETRIES 0x05U
 #define CTAP_PIN_PROTOCOL_ONE        0x01U
 #define CTAP_PIN_HASH_SIZE           16U
 #define CTAP_PIN_TOKEN_SIZE          32U
@@ -95,6 +102,18 @@
 #define CTAP_CRED_PROTECT_UV_OPTIONAL       0x01U
 #define CTAP_CRED_PROTECT_UV_OR_CRED_ID_REQ 0x02U
 #define CTAP_CRED_PROTECT_UV_REQUIRED       0x03U
+
+#define CTAP_PIN_PERMISSION_MC       0x01U
+#define CTAP_PIN_PERMISSION_GA       0x02U
+#define CTAP_PIN_PERMISSION_CM       0x04U
+#define CTAP_PIN_PERMISSION_BE       0x08U
+#define CTAP_PIN_PERMISSION_LBW      0x10U
+#define CTAP_PIN_PERMISSION_ACFG     0x20U
+#define CTAP_PIN_PERMISSION_PCM      0x40U
+#define CTAP_PIN_PERMISSION_KNOWN_MASK \
+  (CTAP_PIN_PERMISSION_MC | CTAP_PIN_PERMISSION_GA | CTAP_PIN_PERMISSION_CM | \
+   CTAP_PIN_PERMISSION_BE | CTAP_PIN_PERMISSION_LBW | CTAP_PIN_PERMISSION_ACFG | \
+   CTAP_PIN_PERMISSION_PCM)
 
 typedef struct
 {
@@ -184,12 +203,16 @@ typedef struct
   uint8_t has_pin_auth;
   uint8_t has_new_pin_enc;
   uint8_t has_pin_hash_enc;
+  uint8_t has_permissions;
+  uint8_t permissions;
+  uint8_t has_rp_id;
   uint8_t key_agreement_pub[FIDO_P256_PUBLIC_KEY_SIZE];
   uint8_t pin_auth[16];
   uint8_t new_pin_enc[CTAP_PIN_MAX_ENC_SIZE];
   uint16_t new_pin_enc_len;
   uint8_t pin_hash_enc[16];
   uint16_t pin_hash_enc_len;
+  char rp_id[96];
 } ctap_client_pin_req_t;
 
 typedef struct
@@ -263,6 +286,10 @@ static uint8_t s_ctap_pin_consecutive_failures;
 static uint8_t s_ctap_pin_power_cycle_blocked;
 static uint8_t s_ctap_pin_token[CTAP_PIN_TOKEN_SIZE];
 static uint8_t s_ctap_pin_token_valid;
+static uint8_t s_ctap_pin_token_permissions;
+static uint8_t s_ctap_pin_token_has_rp_id;
+static uint8_t s_ctap_pin_token_default_permissions;
+static char s_ctap_pin_token_rp_id[96];
 static uint8_t s_ctap_pin_key_agreement_priv[FIDO_P256_PRIVATE_KEY_SIZE];
 static uint8_t s_ctap_pin_key_agreement_pub[FIDO_P256_PUBLIC_KEY_SIZE];
 static uint8_t s_ctap_pin_key_agreement_valid;
@@ -358,6 +385,14 @@ static void ctap_pin_reset_retries(void)
   s_ctap_pin_power_cycle_blocked = 0U;
 }
 
+static void ctap_pin_clear_token_state(void)
+{
+  s_ctap_pin_token_permissions = 0U;
+  s_ctap_pin_token_has_rp_id = 0U;
+  s_ctap_pin_token_default_permissions = 0U;
+  memset(s_ctap_pin_token_rp_id, 0, sizeof(s_ctap_pin_token_rp_id));
+}
+
 static void ctap_pin_reset_token(void)
 {
   if (fido_crypto_random(s_ctap_pin_token, sizeof(s_ctap_pin_token)) != 0U)
@@ -369,6 +404,137 @@ static void ctap_pin_reset_token(void)
     memset(s_ctap_pin_token, 0, sizeof(s_ctap_pin_token));
     s_ctap_pin_token_valid = 0U;
   }
+  ctap_pin_clear_token_state();
+}
+
+static void ctap_pin_set_token_state(uint8_t permissions, const char *rp_id, uint8_t default_permissions)
+{
+  uint16_t copy_len = 0U;
+
+  s_ctap_pin_token_permissions = (uint8_t)(permissions & CTAP_PIN_PERMISSION_KNOWN_MASK);
+  s_ctap_pin_token_default_permissions = (uint8_t)(default_permissions != 0U ? 1U : 0U);
+  s_ctap_pin_token_has_rp_id = 0U;
+  memset(s_ctap_pin_token_rp_id, 0, sizeof(s_ctap_pin_token_rp_id));
+
+  if ((rp_id == NULL) || (rp_id[0] == '\0'))
+  {
+    return;
+  }
+
+  copy_len = (uint16_t)strlen(rp_id);
+  if (copy_len >= sizeof(s_ctap_pin_token_rp_id))
+  {
+    copy_len = (uint16_t)(sizeof(s_ctap_pin_token_rp_id) - 1U);
+  }
+  memcpy(s_ctap_pin_token_rp_id, rp_id, copy_len);
+  s_ctap_pin_token_rp_id[copy_len] = '\0';
+  s_ctap_pin_token_has_rp_id = 1U;
+}
+
+static uint8_t ctap_pin_token_has_permission(uint8_t permission)
+{
+  if ((permission == CTAP_PIN_PERMISSION_CM) || (permission == CTAP_PIN_PERMISSION_PCM))
+  {
+    return (uint8_t)((s_ctap_pin_token_permissions &
+                      (CTAP_PIN_PERMISSION_CM | CTAP_PIN_PERMISSION_PCM)) != 0U);
+  }
+
+  return (uint8_t)((s_ctap_pin_token_permissions & permission) != 0U);
+}
+
+static uint8_t ctap_pin_token_rp_hash_matches(const uint8_t rp_id_hash[FIDO_SHA256_SIZE])
+{
+  uint8_t token_rp_hash[FIDO_SHA256_SIZE];
+
+  if (rp_id_hash == NULL)
+  {
+    return 0U;
+  }
+  if (s_ctap_pin_token_has_rp_id == 0U)
+  {
+    return 1U;
+  }
+
+  fido_crypto_sha256((const uint8_t *)s_ctap_pin_token_rp_id,
+                     (uint32_t)strlen(s_ctap_pin_token_rp_id),
+                     token_rp_hash);
+  return (uint8_t)(memcmp(token_rp_hash, rp_id_hash, sizeof(token_rp_hash)) == 0U);
+}
+
+static uint8_t ctap_pin_token_rp_matches(const char *rp_id)
+{
+  if ((rp_id == NULL) || (rp_id[0] == '\0'))
+  {
+    return 0U;
+  }
+  if (s_ctap_pin_token_has_rp_id == 0U)
+  {
+    return 1U;
+  }
+
+  return (uint8_t)(strcmp(s_ctap_pin_token_rp_id, rp_id) == 0);
+}
+
+static uint8_t ctap_pin_token_authorize_rp(uint8_t permission, const char *rp_id)
+{
+  if (ctap_pin_token_has_permission(permission) == 0U)
+  {
+    return 0U;
+  }
+  if ((rp_id == NULL) || (rp_id[0] == '\0'))
+  {
+    return 0U;
+  }
+  if (s_ctap_pin_token_has_rp_id != 0U)
+  {
+    return ctap_pin_token_rp_matches(rp_id);
+  }
+  if (s_ctap_pin_token_default_permissions == 0U)
+  {
+    return 0U;
+  }
+
+  ctap_pin_set_token_state(s_ctap_pin_token_permissions, rp_id, 0U);
+  return 1U;
+}
+
+static uint8_t ctap_pin_token_authorize_global(uint8_t permission)
+{
+  return ctap_pin_token_has_permission(permission);
+}
+
+static uint8_t ctap_client_pin_permissions_status(uint8_t permissions, const char *rp_id)
+{
+  uint8_t known_permissions = (uint8_t)(permissions & CTAP_PIN_PERMISSION_KNOWN_MASK);
+
+  if (permissions == 0U)
+  {
+    return CTAP_ERR_INVALID_PARAMETER;
+  }
+  if ((known_permissions & (CTAP_PIN_PERMISSION_MC | CTAP_PIN_PERMISSION_GA)) != 0U)
+  {
+    if ((rp_id == NULL) || (rp_id[0] == '\0'))
+    {
+      return CTAP_ERR_MISSING_PARAMETER;
+    }
+  }
+  if ((known_permissions & CTAP_PIN_PERMISSION_BE) != 0U)
+  {
+    return CTAP_ERR_UNAUTHORIZED_PERMISSION;
+  }
+
+  return CTAP_STATUS_OK;
+}
+
+static uint8_t ctap_pin_token_authorize_credential_rp(uint8_t permission,
+                                                      const fido_store_credential_t *credential)
+{
+  if ((credential == NULL) || (ctap_pin_token_has_permission(permission) == 0U))
+  {
+    return 0U;
+  }
+
+  return ctap_pin_token_rp_hash_matches(credential->rp_id_hash);
 }
 
 static uint8_t ctap_pin_ensure_key_agreement(void)
@@ -1995,6 +2161,39 @@ static uint8_t parse_client_pin(const uint8_t *req,
         break;
       }
 
+      case CTAP_PIN_KEY_PERMISSIONS:
+      {
+        uint32_t value;
+
+        if ((cbor_read_uint(&reader, &value) == 0U) || (value > 0xFFU))
+        {
+          return 0U;
+        }
+        parsed->permissions = (uint8_t)value;
+        parsed->has_permissions = 1U;
+        break;
+      }
+
+      case CTAP_PIN_KEY_RP_ID:
+      {
+        cbor_span_t span;
+        uint16_t copy_len;
+
+        if (cbor_read_text(&reader, &span) == 0U)
+        {
+          return 0U;
+        }
+        copy_len = span.len;
+        if (copy_len >= sizeof(parsed->rp_id))
+        {
+          copy_len = (uint16_t)(sizeof(parsed->rp_id) - 1U);
+        }
+        memcpy(parsed->rp_id, span.ptr, copy_len);
+        parsed->rp_id[copy_len] = '\0';
+        parsed->has_rp_id = 1U;
+        break;
+      }
+
       default:
         if (cbor_skip_item(&reader) == 0U)
         {
@@ -2152,6 +2351,29 @@ static uint8_t build_client_pin_retries_response(uint8_t *resp, uint16_t resp_ca
 {
   uint16_t off = 1U;
 
+  if ((resp == NULL) || (resp_len == NULL) || (resp_cap < 6U))
+  {
+    return 0U;
+  }
+
+  resp[0] = CTAP_STATUS_OK;
+  if ((cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(CTAP_PIN_RESP_KEY_RETRIES, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(s_ctap_pin_retries, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(CTAP_PIN_RESP_KEY_POWER_CYCLE_STATE, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(s_ctap_pin_power_cycle_blocked != 0U ? 1U : 0U, resp, resp_cap, &off) == 0U))
+  {
+    return 0U;
+  }
+
+  *resp_len = off;
+  return 1U;
+}
+
+static uint8_t build_client_pin_uv_retries_response(uint8_t *resp, uint16_t resp_cap, uint16_t *resp_len)
+{
+  uint16_t off = 1U;
+
   if ((resp == NULL) || (resp_len == NULL) || (resp_cap < 4U))
   {
     return 0U;
@@ -2159,8 +2381,8 @@ static uint8_t build_client_pin_retries_response(uint8_t *resp, uint16_t resp_ca
 
   resp[0] = CTAP_STATUS_OK;
   if ((cbor_write_map(1U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_uint(CTAP_PIN_RESP_KEY_RETRIES, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_uint(s_ctap_pin_retries, resp, resp_cap, &off) == 0U))
+      (cbor_write_uint(CTAP_PIN_RESP_KEY_UV_RETRIES, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0U, resp, resp_cap, &off) == 0U))
   {
     return 0U;
   }
@@ -2191,6 +2413,9 @@ static uint8_t build_client_pin_key_agreement_response(uint8_t *resp, uint16_t r
 }
 
 static uint8_t build_client_pin_token_response(const uint8_t shared_secret[FIDO_SHA256_SIZE],
+                                               uint8_t permissions,
+                                               const char *rp_id,
+                                               uint8_t default_permissions,
                                                uint8_t *resp,
                                                uint16_t resp_cap,
                                                uint16_t *resp_len)
@@ -2224,6 +2449,7 @@ static uint8_t build_client_pin_token_response(const uint8_t shared_secret[FIDO_
     return 0U;
   }
 
+  ctap_pin_set_token_state(permissions, rp_id, default_permissions);
   *resp_len = off;
   return 1U;
 }
@@ -2962,8 +3188,16 @@ static uint8_t ctap_credman_verify_pin_auth(const ctap_cred_mgmt_req_t *parsed)
   }
 
   fido_crypto_hmac_sha256(s_ctap_pin_token, sizeof(s_ctap_pin_token), data, data_len, auth);
-  return (uint8_t)(memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) == 0 ?
-                   CTAP_STATUS_OK : CTAP_ERR_PIN_AUTH_INVALID);
+  if (memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) != 0)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
+  if (ctap_pin_token_has_permission(CTAP_PIN_PERMISSION_CM) == 0U)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
+
+  return CTAP_STATUS_OK;
 }
 
 static uint8_t ctap_config_verify_pin_auth(const ctap_config_req_t *parsed)
@@ -3003,8 +3237,16 @@ static uint8_t ctap_config_verify_pin_auth(const ctap_config_req_t *parsed)
   }
 
   fido_crypto_hmac_sha256(s_ctap_pin_token, sizeof(s_ctap_pin_token), data, data_len, auth);
-  return (uint8_t)(memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) == 0 ?
-                   CTAP_STATUS_OK : CTAP_ERR_PIN_AUTH_INVALID);
+  if (memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) != 0)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
+  if (ctap_pin_token_authorize_global(CTAP_PIN_PERMISSION_ACFG) == 0U)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
+
+  return CTAP_STATUS_OK;
 }
 
 static void ctap_largeblobs_reset_write_state(void)
@@ -3051,9 +3293,16 @@ static uint8_t ctap_largeblobs_verify_pin_auth(const ctap_large_blobs_req_t *par
   fido_crypto_sha256(parsed->set_data.ptr, parsed->set_data.len, chunk_hash);
   memcpy(&data[38], chunk_hash, sizeof(chunk_hash));
   fido_crypto_hmac_sha256(s_ctap_pin_token, sizeof(s_ctap_pin_token), data, sizeof(data), auth);
+  if (memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) != 0)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
+  if (ctap_pin_token_authorize_global(CTAP_PIN_PERMISSION_LBW) == 0U)
+  {
+    return CTAP_ERR_PIN_AUTH_INVALID;
+  }
 
-  return (uint8_t)(memcmp(auth, parsed->pin_auth, sizeof(parsed->pin_auth)) == 0 ?
-                   CTAP_STATUS_OK : CTAP_ERR_PIN_AUTH_INVALID);
+  return CTAP_STATUS_OK;
 }
 
 static uint8_t usbd_ctap_min_handle_large_blobs(const uint8_t *req,
@@ -4101,11 +4350,13 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(12U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(14U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("rk", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("up", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("uv", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("plat", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("makeCredUvNotRqd", resp, resp_cap, &off) == 0U) ||
@@ -4120,8 +4371,10 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("clientPin", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(fido_store_client_pin_is_set(), resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("noMcGaPermissionsWithClientPin", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("pinUvAuthToken", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("noMcGaPermissionsWithClientPin", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("largeBlobs", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("setMinPINLength", resp, resp_cap, &off) == 0U) ||
@@ -4214,6 +4467,14 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
 
     case CTAP_PIN_SUBCMD_GET_KEY_AGREEMENT:
       if (build_client_pin_key_agreement_response(resp, resp_cap, resp_len) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+      }
+      ctap_diag_note_status(CTAP_STATUS_OK);
+      return USBD_CTAP_MIN_DONE;
+
+    case CTAP_PIN_SUBCMD_GET_UV_RETRIES:
+      if (build_client_pin_uv_retries_response(resp, resp_cap, resp_len) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
@@ -4317,11 +4578,15 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
       }
       if (ctap_get_force_pin_change_required() != 0U)
       {
-        return usbd_ctap_min_error(CTAP_ERR_PIN_POLICY_VIOLATION, resp, resp_cap, resp_len);
+        return usbd_ctap_min_error(CTAP_ERR_PIN_INVALID, resp, resp_cap, resp_len);
       }
       if (s_ctap_pin_power_cycle_blocked != 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_BLOCKED, resp, resp_cap, resp_len);
+      }
+      if ((parsed.has_permissions != 0U) || (parsed.has_rp_id != 0U))
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
       }
       if ((parsed.has_key_agreement == 0U) || (parsed.has_pin_hash_enc == 0U))
       {
@@ -4338,12 +4603,74 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
         return usbd_ctap_min_error(ctap_pin_note_failure(), resp, resp_cap, resp_len);
       }
       ctap_pin_note_success();
-      if (build_client_pin_token_response(shared_secret, resp, resp_cap, resp_len) == 0U)
+      if (build_client_pin_token_response(shared_secret,
+                                          (uint8_t)(CTAP_PIN_PERMISSION_MC | CTAP_PIN_PERMISSION_GA),
+                                          NULL,
+                                          1U,
+                                          resp,
+                                          resp_cap,
+                                          resp_len) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
       ctap_diag_note_status(CTAP_STATUS_OK);
       return USBD_CTAP_MIN_DONE;
+
+    case CTAP_PIN_SUBCMD_GET_TOKEN_USING_PIN:
+    {
+      uint8_t permissions_status;
+      uint8_t known_permissions;
+
+      if (fido_store_client_pin_is_set() == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_NOT_SET, resp, resp_cap, resp_len);
+      }
+      if (ctap_get_force_pin_change_required() != 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_POLICY_VIOLATION, resp, resp_cap, resp_len);
+      }
+      if (s_ctap_pin_power_cycle_blocked != 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_BLOCKED, resp, resp_cap, resp_len);
+      }
+      if ((parsed.has_key_agreement == 0U) || (parsed.has_pin_hash_enc == 0U) || (parsed.has_permissions == 0U))
+      {
+        return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
+      }
+      permissions_status = ctap_client_pin_permissions_status(parsed.permissions,
+                                                              parsed.has_rp_id != 0U ? parsed.rp_id : NULL);
+      if (permissions_status != CTAP_STATUS_OK)
+      {
+        return usbd_ctap_min_error(permissions_status, resp, resp_cap, resp_len);
+      }
+      if ((ctap_client_pin_get_shared_secret(&parsed, shared_secret) == 0U) ||
+          (fido_store_client_pin_get_hash(stored_pin_hash) == 0U) ||
+          (ctap_client_pin_decrypt_pin_hash(shared_secret, &parsed, provided_pin_hash) == 0U))
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INVALID_PARAMETER, resp, resp_cap, resp_len);
+      }
+      if (memcmp(stored_pin_hash, provided_pin_hash, CTAP_PIN_HASH_SIZE) != 0)
+      {
+        return usbd_ctap_min_error(ctap_pin_note_failure(), resp, resp_cap, resp_len);
+      }
+      known_permissions = (uint8_t)(parsed.permissions & CTAP_PIN_PERMISSION_KNOWN_MASK);
+      ctap_pin_note_success();
+      if (build_client_pin_token_response(shared_secret,
+                                          known_permissions,
+                                          parsed.has_rp_id != 0U ? parsed.rp_id : NULL,
+                                          0U,
+                                          resp,
+                                          resp_cap,
+                                          resp_len) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+      }
+      ctap_diag_note_status(CTAP_STATUS_OK);
+      return USBD_CTAP_MIN_DONE;
+    }
+
+    case CTAP_PIN_SUBCMD_GET_TOKEN_USING_UV:
+      return usbd_ctap_min_error(CTAP_ERR_INVALID_COMMAND, resp, resp_cap, resp_len);
 
     default:
       return usbd_ctap_min_error(CTAP_ERR_INVALID_COMMAND, resp, resp_cap, resp_len);
@@ -4381,6 +4708,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
   switch (parsed.subcmd)
   {
     case CTAP_CRED_MGMT_SUBCMD_METADATA:
+      if (s_ctap_pin_token_has_rp_id != 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
+      }
       if (build_credman_metadata_response(resp, resp_cap, resp_len) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
@@ -4401,6 +4732,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       if (ctap_credman_get_nth_rp(0U, &credential) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+      }
+      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
       memcpy(s_ctap_credman_rp_hash, credential.rp_id_hash, sizeof(s_ctap_credman_rp_hash));
       s_ctap_credman_rp_cursor = 1U;
@@ -4425,6 +4760,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
+      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
+      }
       memcpy(s_ctap_credman_rp_hash, credential.rp_id_hash, sizeof(s_ctap_credman_rp_hash));
       s_ctap_credman_rp_cursor++;
       if (build_credman_rp_response(&credential, 0U, 0U, resp, resp_cap, resp_len) == 0U)
@@ -4439,6 +4778,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
       }
+      if (ctap_pin_token_rp_hash_matches(parsed.rp_id_hash) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
+      }
       memcpy(s_ctap_credman_rp_hash, parsed.rp_id_hash, sizeof(s_ctap_credman_rp_hash));
       s_ctap_credman_rk_total = ctap_credman_count_rks_for_rp(s_ctap_credman_rp_hash);
       s_ctap_credman_rk_cursor = 0U;
@@ -4449,6 +4792,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       if (ctap_credman_get_nth_rk_for_rp(s_ctap_credman_rp_hash, 0U, &credential, &slot_index) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+      }
+      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
       s_ctap_credman_rk_cursor = 1U;
       if (build_credman_rk_response(&credential,
@@ -4475,6 +4822,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
+      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
+      }
       s_ctap_credman_rk_cursor++;
       if (build_credman_rk_response(&credential, 0U, 0U, resp, resp_cap, resp_len) == 0U)
       {
@@ -4494,6 +4845,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
                                            &slot_index) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+      }
+      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
       if (fido_store_delete(slot_index) == 0U)
       {
@@ -4516,6 +4871,10 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
                                            &slot_index) == 0U)
       {
         return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
+      }
+      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
       if (fido_store_update_user(slot_index,
                                  parsed.user_id,
@@ -4651,6 +5010,10 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
     {
       return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
     }
+    if (ctap_pin_token_authorize_rp(CTAP_PIN_PERMISSION_MC, parsed.rp_id) == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
+    }
     pin_uv_verified = 1U;
   }
   if ((uv_required != 0U) && (pin_uv_verified == 0U))
@@ -4726,6 +5089,10 @@ static uint8_t usbd_ctap_min_handle_get_assertion(const uint8_t *req,
         (ctap_verify_pin_uv_auth_param(parsed.client_data_hash,
                                        parsed.pin_uv_auth_protocol,
                                        parsed.pin_uv_auth_param) == 0U))
+    {
+      return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
+    }
+    if (ctap_pin_token_authorize_rp(CTAP_PIN_PERMISSION_GA, parsed.rp_id) == 0U)
     {
       return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
     }
