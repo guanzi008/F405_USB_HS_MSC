@@ -126,6 +126,28 @@ static void fido_store_be16(uint8_t *p, uint16_t value)
   p[1] = (uint8_t)value;
 }
 
+static uint8_t fido_lock_active(usbd_hid_fido_state_t *state, uint32_t now_ms)
+{
+  if (state == NULL)
+  {
+    return 0U;
+  }
+
+  if ((state->lock_cid == 0U) || (state->lock_expires_ms == 0U))
+  {
+    return 0U;
+  }
+
+  if ((int32_t)(now_ms - state->lock_expires_ms) >= 0)
+  {
+    state->lock_cid = 0U;
+    state->lock_expires_ms = 0U;
+    return 0U;
+  }
+
+  return 1U;
+}
+
 static void fido_hex_encode(const uint8_t *src, uint16_t len, char *dst, uint16_t dst_cap)
 {
   static const char hex_digits[] = "0123456789abcdef";
@@ -748,7 +770,7 @@ static void fido_process_message(usbd_hid_fido_state_t *state)
     payload[13] = 0x01U;
     payload[14] = 0x00U;
     payload[15] = 0x00U;
-    payload[16] = 0x05U;
+    payload[16] = 0x07U;
     memcpy(state->tx_buf, payload, sizeof(payload));
     fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_INIT, sizeof(payload));
     return;
@@ -764,6 +786,37 @@ static void fido_process_message(usbd_hid_fido_state_t *state)
   if (state->rx_cmd == FIDO_HID_CMD_WINK)
   {
     fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_WINK, 0U);
+    return;
+  }
+
+  if (state->rx_cmd == FIDO_HID_CMD_LOCK)
+  {
+    uint32_t now_ms = HAL_GetTick();
+
+    if (state->rx_expected_len != 1U)
+    {
+      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_INVALID_LEN);
+      return;
+    }
+    if (state->rx_buf[0] > 10U)
+    {
+      fido_queue_error(state, state->rx_cid, FIDO_HID_ERR_INVALID_PAR);
+      return;
+    }
+    if (state->rx_buf[0] == 0U)
+    {
+      if (state->lock_cid == state->rx_cid)
+      {
+        state->lock_cid = 0U;
+        state->lock_expires_ms = 0U;
+      }
+    }
+    else
+    {
+      state->lock_cid = state->rx_cid;
+      state->lock_expires_ms = now_ms + ((uint32_t)state->rx_buf[0] * 1000U);
+    }
+    fido_start_tx(state, state->rx_cid, FIDO_HID_CMD_LOCK, 0U);
     return;
   }
 
@@ -875,6 +928,7 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
   uint32_t cid;
   uint8_t tag;
   uint16_t copy_len;
+  uint32_t now_ms;
 
   (void)pdev;
   (void)class_id;
@@ -889,8 +943,17 @@ uint16_t usbd_hid_fido_process(USBD_HandleTypeDef *pdev,
 
   cid = fido_load_be32(request);
   tag = request[4];
+  now_ms = HAL_GetTick();
+  (void)fido_lock_active(state, now_ms);
 
   if (state->tx_active != 0U)
+  {
+    fido_queue_error(state, cid, FIDO_HID_ERR_BUSY);
+  }
+  else if ((cid != FIDO_HID_BROADCAST_CID) &&
+           (fido_lock_active(state, now_ms) != 0U) &&
+           (cid != state->lock_cid) &&
+           (((tag & 0x80U) == 0U) || ((tag & 0x7FU) != FIDO_HID_CMD_INIT)))
   {
     fido_queue_error(state, cid, FIDO_HID_ERR_BUSY);
   }

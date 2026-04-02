@@ -13,6 +13,7 @@
 
 #define FIDO_HID_CMD_PING           0x01U
 #define FIDO_HID_CMD_MSG            0x03U
+#define FIDO_HID_CMD_LOCK           0x04U
 #define FIDO_HID_CMD_INIT           0x06U
 #define FIDO_HID_CMD_WINK           0x08U
 #define FIDO_HID_CMD_CBOR           0x10U
@@ -54,6 +55,8 @@ typedef struct
   uint32_t pending_cid;
   uint8_t pending_cmd;
   uint32_t last_keepalive_ms;
+  uint32_t lock_cid;
+  uint32_t lock_expires_ms;
   uint8_t pending_req_hash[FIDO_SHA256_SIZE];
   uint8_t pending_buf[FIDO_HID_MSG_MAX];
   uint8_t rx_buf[FIDO_HID_MSG_MAX];

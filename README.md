@@ -22,6 +22,7 @@
 - `CTAP2 makeCredential / getAssertion`
 - `CTAP2 getNextAssertion`
 - `CTAPHID CANCEL`
+- `CTAPHID LOCK`
 - `ClientPIN`
   - `getRetries`
   - `getKeyAgreement`
