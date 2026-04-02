@@ -10,6 +10,7 @@
 #define CTAP_CMD_CLIENT_PIN      0x06U
 #define CTAP_CMD_RESET           0x07U
 #define CTAP_CMD_CRED_MGMT       0x0AU
+#define CTAP_CMD_SELECTION       0x0BU
 #define CTAP_CMD_LARGE_BLOBS     0x0CU
 #define CTAP_CMD_CONFIG          0x0DU
 #define CTAP_CMD_CRED_MGMT_PRE   0x41U

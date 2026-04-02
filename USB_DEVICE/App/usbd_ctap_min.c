@@ -4092,15 +4092,16 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_text("FIDO_2_0", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("FIDO_2_1_PRE", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_array(4U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array(5U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("credProtect", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("hmac-secret", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("credBlob", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("largeBlobKey", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("minPinLength", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(11U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(12U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("rk", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("up", resp, resp_cap, &off) == 0U) ||
@@ -4119,6 +4120,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("clientPin", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(fido_store_client_pin_is_set(), resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("noMcGaPermissionsWithClientPin", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("largeBlobs", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("setMinPINLength", resp, resp_cap, &off) == 0U) ||
@@ -4827,6 +4830,21 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
       ctap_credman_reset_state();
       return usbd_ctap_min_handle_client_pin(req, req_len, resp, resp_cap, resp_len);
 
+    case CTAP_CMD_SELECTION:
+      ctap_diag_note_request(CTAP_CMD_SELECTION, 0U, 0U, 0U);
+      if (req_len != 1U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+      }
+      s_ctap_ui_state = USBD_CTAP_UI_WAIT_TOUCH;
+      s_ctap_pending_cmd = CTAP_CMD_SELECTION;
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
+      s_ctap_user_presence_latched = 0U;
+      ctap_credman_reset_state();
+      *resp_len = 0U;
+      return USBD_CTAP_MIN_PENDING;
+
     case CTAP_CMD_CONFIG:
       s_ctap_ui_state = USBD_CTAP_UI_IDLE;
       s_ctap_pending_cmd = 0U;
@@ -5071,6 +5089,18 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     s_ctap_pin_token_valid = 0U;
     resp[0] = CTAP_STATUS_OK;
     *resp_len = 1U;
+    ctap_diag_note_status(CTAP_STATUS_OK);
+    return USBD_CTAP_MIN_DONE;
+  }
+
+  if (cmd == CTAP_CMD_SELECTION)
+  {
+    s_ctap_selection_count = 0U;
+    s_ctap_selection_index = 0U;
+    ctap_credman_reset_state();
+    resp[0] = CTAP_STATUS_OK;
+    *resp_len = 1U;
+    ctap_remember_recent_approval(cmd, req, req_len);
     ctap_diag_note_status(CTAP_STATUS_OK);
     return USBD_CTAP_MIN_DONE;
   }
