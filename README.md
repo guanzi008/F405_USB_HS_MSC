@@ -23,6 +23,11 @@
 - `CTAP2 getNextAssertion`
 - `CTAPHID CANCEL`
 - `CTAPHID LOCK`
+
+补充行为：
+
+- 当 `alwaysUv = true` 时，设备会按规范禁用 `CTAP1/U2F REGISTER / AUTHENTICATE`
+- 此时 `getInfo.versions` 不再返回 `U2F_V2`
 - `ClientPIN`
   - `getRetries`
   - `getKeyAgreement`

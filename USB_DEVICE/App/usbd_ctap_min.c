@@ -4440,8 +4440,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
   resp[off++] = CTAP_STATUS_OK;
   if ((cbor_write_map(15U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_array(3U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("U2F_V2", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array((uint32_t)(always_uv != 0U ? 2U : 3U), resp, resp_cap, &off) == 0U) ||
+      ((always_uv == 0U) && (cbor_write_text("U2F_V2", resp, resp_cap, &off) == 0U)) ||
       (cbor_write_text("FIDO_2_0", resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("FIDO_2_1_PRE", resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||

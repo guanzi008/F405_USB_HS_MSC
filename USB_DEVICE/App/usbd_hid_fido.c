@@ -85,6 +85,7 @@ static const uint8_t k_u2f_attest_cert_der[] = {
 #define U2F_SW_NO_ERROR             0x9000U
 #define U2F_SW_WRONG_LENGTH         0x6700U
 #define U2F_SW_CONDITIONS_NOT_SATISFIED 0x6985U
+#define U2F_SW_COMMAND_NOT_ALLOWED  0x6986U
 #define U2F_SW_WRONG_DATA           0x6A80U
 #define U2F_SW_INS_NOT_SUPPORTED    0x6D00U
 #define U2F_SW_CLA_NOT_SUPPORTED    0x6E00U
@@ -103,6 +104,18 @@ typedef struct
 } fido_u2f_apdu_t;
 
 static void fido_start_tx(usbd_hid_fido_state_t *state, uint32_t cid, uint8_t cmd, uint16_t len);
+
+static uint8_t fido_u2f_disabled(void)
+{
+  uint8_t always_uv = 0U;
+
+  if (fido_store_client_pin_get_always_uv(&always_uv) == 0U)
+  {
+    return 0U;
+  }
+
+  return (uint8_t)(always_uv != 0U ? 1U : 0U);
+}
 
 static uint32_t fido_load_be32(const uint8_t *p)
 {
@@ -653,6 +666,13 @@ static void fido_process_u2f_message(usbd_hid_fido_state_t *state)
   if (apdu.cla != 0x00U)
   {
     fido_u2f_reply_status(state, state->rx_cid, U2F_SW_CLA_NOT_SUPPORTED);
+    return;
+  }
+
+  if ((fido_u2f_disabled() != 0U) &&
+      ((apdu.ins == U2F_INS_REGISTER) || (apdu.ins == U2F_INS_AUTHENTICATE)))
+  {
+    fido_u2f_reply_status(state, state->rx_cid, U2F_SW_COMMAND_NOT_ALLOWED);
     return;
   }
 
