@@ -537,6 +537,22 @@ static uint8_t ctap_pin_token_authorize_credential_rp(uint8_t permission,
   return ctap_pin_token_rp_hash_matches(credential->rp_id_hash);
 }
 
+static void ctap_pin_token_note_user_present_use(void)
+{
+  if (s_ctap_pin_token_valid == 0U)
+  {
+    return;
+  }
+
+  s_ctap_pin_token_permissions &= CTAP_PIN_PERMISSION_LBW;
+  s_ctap_pin_token_default_permissions = 0U;
+  if ((s_ctap_pin_token_permissions & ~CTAP_PIN_PERMISSION_LBW) == 0U)
+  {
+    s_ctap_pin_token_has_rp_id = 0U;
+    memset(s_ctap_pin_token_rp_id, 0, sizeof(s_ctap_pin_token_rp_id));
+  }
+}
+
 static uint8_t ctap_pin_ensure_key_agreement(void)
 {
   if (s_ctap_pin_key_agreement_valid != 0U)
@@ -3153,7 +3169,7 @@ static uint8_t parse_large_blobs(const uint8_t *req,
   return 1U;
 }
 
-static uint8_t ctap_credman_verify_pin_auth(const ctap_cred_mgmt_req_t *parsed)
+static uint8_t ctap_credman_verify_pin_auth(const ctap_cred_mgmt_req_t *parsed, uint8_t preview_compat)
 {
   uint8_t auth[FIDO_SHA256_SIZE];
   uint8_t data[1U + 128U];
@@ -3194,7 +3210,10 @@ static uint8_t ctap_credman_verify_pin_auth(const ctap_cred_mgmt_req_t *parsed)
   }
   if (ctap_pin_token_has_permission(CTAP_PIN_PERMISSION_CM) == 0U)
   {
-    return CTAP_ERR_PIN_AUTH_INVALID;
+    if ((preview_compat == 0U) || (s_ctap_pin_token_default_permissions == 0U))
+    {
+      return CTAP_ERR_PIN_AUTH_INVALID;
+    }
   }
 
   return CTAP_STATUS_OK;
@@ -4687,6 +4706,7 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
   fido_store_credential_t credential;
   uint32_t slot_index = 0U;
   uint8_t auth_status;
+  uint8_t preview_compat;
 
   ctap_diag_note_request(req[0], 0U, 0U, 0U);
 
@@ -4699,7 +4719,8 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
     return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
   }
 
-  auth_status = ctap_credman_verify_pin_auth(&parsed);
+  preview_compat = (uint8_t)(req[0] == CTAP_CMD_CRED_MGMT_PRE ? 1U : 0U);
+  auth_status = ctap_credman_verify_pin_auth(&parsed, preview_compat);
   if (auth_status != CTAP_STATUS_OK)
   {
     return usbd_ctap_min_error(auth_status, resp, resp_cap, resp_len);
@@ -4708,7 +4729,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
   switch (parsed.subcmd)
   {
     case CTAP_CRED_MGMT_SUBCMD_METADATA:
-      if (s_ctap_pin_token_has_rp_id != 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (s_ctap_pin_token_has_rp_id != 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4733,7 +4756,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4760,7 +4785,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4778,7 +4805,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_MISSING_PARAMETER, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_rp_hash_matches(parsed.rp_id_hash) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_rp_hash_matches(parsed.rp_id_hash) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4793,7 +4822,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4822,7 +4853,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4846,7 +4879,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -4872,7 +4907,9 @@ static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
       {
         return usbd_ctap_min_error(CTAP_ERR_NO_CREDENTIALS, resp, resp_cap, resp_len);
       }
-      if (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U)
+      if ((preview_compat == 0U) &&
+          (s_ctap_pin_token_default_permissions == 0U) &&
+          (ctap_pin_token_authorize_credential_rp(CTAP_PIN_PERMISSION_CM, &credential) == 0U))
       {
         return usbd_ctap_min_error(CTAP_ERR_PIN_AUTH_INVALID, resp, resp_cap, resp_len);
       }
@@ -5351,6 +5388,10 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     {
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
     }
+    if (pin_uv_verified != 0U)
+    {
+      ctap_pin_token_note_user_present_use();
+    }
     ctap_remember_recent_approval(cmd, req, req_len);
     ctap_diag_note_status(CTAP_STATUS_OK);
     return USBD_CTAP_MIN_DONE;
@@ -5434,6 +5475,10 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                      resp_len) == 0U)
     {
       return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+    }
+    if (pin_uv_verified != 0U)
+    {
+      ctap_pin_token_note_user_present_use();
     }
     s_ctap_selection_count = 0U;
     s_ctap_selection_index = 0U;
