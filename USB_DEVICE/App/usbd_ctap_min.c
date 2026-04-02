@@ -16,6 +16,7 @@
 #define CTAP_MC_KEY_OPTIONS          0x07U
 #define CTAP_MC_KEY_PIN_UV_AUTH_PARAM    0x08U
 #define CTAP_MC_KEY_PIN_UV_AUTH_PROTOCOL 0x09U
+#define CTAP_MC_KEY_ENTERPRISE_ATTESTATION 0x0AU
 
 #define CTAP_GA_KEY_RP_ID            0x01U
 #define CTAP_GA_KEY_CLIENT_DATA_HASH 0x02U
@@ -82,6 +83,7 @@
 
 #define CTAP_CONFIG_SUBCMD_ALWAYS_UV        0x02U
 #define CTAP_CONFIG_SUBCMD_SET_MIN_PIN_LEN  0x03U
+#define CTAP_CONFIG_SUBCMD_ENABLE_EP        0x01U
 
 #define CTAP_CONFIG_PARAM_NEW_MIN_PIN_LEN   0x01U
 #define CTAP_CONFIG_PARAM_MIN_PIN_RPIDS     0x02U
@@ -154,6 +156,8 @@ typedef struct
   uint8_t pin_uv_auth_param[16];
   uint8_t has_pin_uv_auth_protocol;
   uint8_t pin_uv_auth_protocol;
+  uint8_t has_enterprise_attestation;
+  uint8_t enterprise_attestation;
   uint8_t exclude_credential_ids[CTAP_GA_ALLOW_LIST_MAX][FIDO_CREDENTIAL_ID_SIZE];
   uint16_t exclude_credential_id_lens[CTAP_GA_ALLOW_LIST_MAX];
   uint8_t exclude_credential_count;
@@ -309,6 +313,55 @@ static uint8_t s_ctap_largeblob_write_active;
 static uint16_t s_ctap_largeblob_write_expected_len;
 static uint16_t s_ctap_largeblob_write_received_len;
 static uint8_t s_ctap_largeblob_write_buf[FIDO_STORE_LARGEBLOB_MAX];
+
+static const uint8_t k_ctap_attest_private_key[FIDO_P256_PRIVATE_KEY_SIZE] = {
+    0x45U, 0x1DU, 0xF4U, 0x44U, 0x9BU, 0xA2U, 0x90U, 0x11U,
+    0xCDU, 0x3DU, 0xB0U, 0x2BU, 0xC2U, 0x62U, 0xD8U, 0x4FU,
+    0xEAU, 0x7DU, 0x56U, 0xDDU, 0x87U, 0x64U, 0xD9U, 0x33U,
+    0x55U, 0x4BU, 0x83U, 0xB2U, 0xF8U, 0x23U, 0xE8U, 0xC6U};
+
+static const uint8_t k_ctap_attest_cert_der[] = {
+    0x30U,0x82U,0x01U,0xDFU,0x30U,0x82U,0x01U,0x85U,0xA0U,0x03U,0x02U,0x01U,
+    0x02U,0x02U,0x14U,0x58U,0xC4U,0xB9U,0xC3U,0xCFU,0x80U,0x0AU,0x18U,0xFCU,
+    0xB8U,0x6BU,0xECU,0xE2U,0x66U,0x43U,0x71U,0x78U,0x3BU,0x2FU,0xE6U,0x30U,
+    0x0AU,0x06U,0x08U,0x2AU,0x86U,0x48U,0xCEU,0x3DU,0x04U,0x03U,0x02U,0x30U,
+    0x45U,0x31U,0x22U,0x30U,0x20U,0x06U,0x03U,0x55U,0x04U,0x03U,0x0CU,0x19U,
+    0x55U,0x6CU,0x74U,0x72U,0x61U,0x4CU,0x69U,0x6EU,0x6BU,0x20U,0x55U,0x32U,
+    0x46U,0x20U,0x41U,0x74U,0x74U,0x65U,0x73U,0x74U,0x61U,0x74U,0x69U,0x6FU,
+    0x6EU,0x31U,0x12U,0x30U,0x10U,0x06U,0x03U,0x55U,0x04U,0x0AU,0x0CU,0x09U,
+    0x55U,0x6CU,0x74U,0x72U,0x61U,0x4CU,0x69U,0x6EU,0x6BU,0x31U,0x0BU,0x30U,
+    0x09U,0x06U,0x03U,0x55U,0x04U,0x06U,0x13U,0x02U,0x43U,0x4EU,0x30U,0x1EU,
+    0x17U,0x0DU,0x32U,0x36U,0x30U,0x34U,0x30U,0x31U,0x31U,0x31U,0x31U,0x31U,
+    0x30U,0x39U,0x5AU,0x17U,0x0DU,0x33U,0x36U,0x30U,0x33U,0x32U,0x39U,0x31U,
+    0x31U,0x31U,0x31U,0x30U,0x39U,0x5AU,0x30U,0x45U,0x31U,0x22U,0x30U,0x20U,
+    0x06U,0x03U,0x55U,0x04U,0x03U,0x0CU,0x19U,0x55U,0x6CU,0x74U,0x72U,0x61U,
+    0x4CU,0x69U,0x6EU,0x6BU,0x20U,0x55U,0x32U,0x46U,0x20U,0x41U,0x74U,0x74U,
+    0x65U,0x73U,0x74U,0x61U,0x74U,0x69U,0x6FU,0x6EU,0x31U,0x12U,0x30U,0x10U,
+    0x06U,0x03U,0x55U,0x04U,0x0AU,0x0CU,0x09U,0x55U,0x6CU,0x74U,0x72U,0x61U,
+    0x4CU,0x69U,0x6EU,0x6BU,0x31U,0x0BU,0x30U,0x09U,0x06U,0x03U,0x55U,0x04U,
+    0x06U,0x13U,0x02U,0x43U,0x4EU,0x30U,0x59U,0x30U,0x13U,0x06U,0x07U,0x2AU,
+    0x86U,0x48U,0xCEU,0x3DU,0x02U,0x01U,0x06U,0x08U,0x2AU,0x86U,0x48U,0xCEU,
+    0x3DU,0x03U,0x01U,0x07U,0x03U,0x42U,0x00U,0x04U,0xF3U,0xC5U,0x6AU,0x6DU,
+    0xC2U,0x51U,0xCAU,0xCEU,0x9FU,0x95U,0x05U,0x6BU,0x5BU,0x1CU,0xB2U,0xE5U,
+    0x9FU,0xA0U,0x99U,0x5FU,0x2BU,0x1FU,0x0CU,0x92U,0x9AU,0x62U,0xC1U,0xCAU,
+    0x78U,0x94U,0xE4U,0x4CU,0xF1U,0x8BU,0xE8U,0x33U,0x02U,0xF5U,0x47U,0x5FU,
+    0x34U,0xC2U,0x65U,0x11U,0x07U,0xB5U,0xF7U,0x27U,0x1FU,0xA1U,0x2AU,0x45U,
+    0xF6U,0x9FU,0x55U,0x30U,0xC3U,0x9BU,0xA5U,0xE8U,0x3AU,0xFBU,0xBCU,0x2BU,
+    0xA3U,0x53U,0x30U,0x51U,0x30U,0x1DU,0x06U,0x03U,0x55U,0x1DU,0x0EU,0x04U,
+    0x16U,0x04U,0x14U,0x56U,0xA0U,0x77U,0x0BU,0x47U,0x90U,0x05U,0x02U,0x9AU,
+    0x5EU,0x31U,0x91U,0x43U,0xADU,0x66U,0xEFU,0xAAU,0xC9U,0xB0U,0xF9U,0x30U,
+    0x1FU,0x06U,0x03U,0x55U,0x1DU,0x23U,0x04U,0x18U,0x30U,0x16U,0x80U,0x14U,
+    0x56U,0xA0U,0x77U,0x0BU,0x47U,0x90U,0x05U,0x02U,0x9AU,0x5EU,0x31U,0x91U,
+    0x43U,0xADU,0x66U,0xEFU,0xAAU,0xC9U,0xB0U,0xF9U,0x30U,0x0FU,0x06U,0x03U,
+    0x55U,0x1DU,0x13U,0x01U,0x01U,0xFFU,0x04U,0x05U,0x30U,0x03U,0x01U,0x01U,
+    0xFFU,0x30U,0x0AU,0x06U,0x08U,0x2AU,0x86U,0x48U,0xCEU,0x3DU,0x04U,0x03U,
+    0x02U,0x03U,0x48U,0x00U,0x30U,0x45U,0x02U,0x20U,0x20U,0x45U,0x03U,0x8BU,
+    0x61U,0xD8U,0xB2U,0x95U,0x3FU,0xFCU,0x73U,0x8AU,0x86U,0xF6U,0xDEU,0x29U,
+    0x1EU,0x52U,0x1AU,0x4AU,0x2EU,0xA7U,0x25U,0x0AU,0x9DU,0x61U,0x05U,0x43U,
+    0xA6U,0xEEU,0xA6U,0x62U,0x02U,0x21U,0x00U,0xCAU,0xF2U,0x2DU,0x37U,0x9AU,
+    0xBFU,0x1FU,0x44U,0x76U,0x3AU,0x7AU,0xFBU,0x18U,0x16U,0x7FU,0x71U,0x85U,
+    0xF9U,0x2FU,0xB0U,0x8CU,0x7BU,0x27U,0x5BU,0x0CU,0x11U,0xF8U,0xDBU,0xA9U,
+    0x32U,0x9AU,0x5DU};
 
 static uint8_t parse_cose_p256_public_key(cbor_reader_t *reader,
                                           uint8_t public_key[FIDO_P256_PUBLIC_KEY_SIZE]);
@@ -1688,6 +1741,14 @@ static uint8_t ctap_get_always_uv_enabled(void)
   return (uint8_t)(always_uv != 0U ? 1U : 0U);
 }
 
+static uint8_t ctap_get_enterprise_attestation_enabled(void)
+{
+  uint8_t enabled = 0U;
+
+  (void)fido_store_client_pin_get_enterprise_attestation(&enabled);
+  return (uint8_t)(enabled != 0U ? 1U : 0U);
+}
+
 static uint8_t ctap_get_force_pin_change_required(void)
 {
   uint8_t force_change = 0U;
@@ -1815,6 +1876,19 @@ static uint8_t parse_make_credential(const uint8_t *req,
         }
         parsed->pin_uv_auth_protocol = (uint8_t)value;
         parsed->has_pin_uv_auth_protocol = 1U;
+        break;
+      }
+
+      case CTAP_MC_KEY_ENTERPRISE_ATTESTATION:
+      {
+        uint32_t value;
+
+        if (cbor_read_uint(&reader, &value) == 0U)
+        {
+          return 0U;
+        }
+        parsed->enterprise_attestation = (uint8_t)value;
+        parsed->has_enterprise_attestation = 1U;
         break;
       }
 
@@ -4183,6 +4257,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
                                               uint8_t include_cred_blob_ext,
                                               uint8_t include_hmac_secret_ext,
                                               uint8_t include_large_blob_key,
+                                              uint8_t use_enterprise_attestation,
                                               uint8_t user_verified,
                                               uint8_t *resp,
                                               uint16_t resp_cap,
@@ -4194,6 +4269,7 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   uint16_t auth_len;
   uint16_t signature_len = 0U;
   uint8_t map_count = 3U;
+  uint8_t att_stmt_fields = 2U;
   uint16_t off = 0U;
 
   if ((client_data_hash == NULL) || (resp == NULL) || (resp_len == NULL))
@@ -4212,13 +4288,24 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   {
     return 0U;
   }
-  if (fido_crypto_sign_es256_der(credential->private_key,
-                                 auth_data,
-                                 auth_len,
-                                 client_data_hash,
-                                 signature,
-                                 sizeof(signature),
-                                 &signature_len) == 0U)
+  if ((use_enterprise_attestation != 0U) &&
+      (fido_crypto_sign_p256_sha256_der(k_ctap_attest_private_key,
+                                        auth_data,
+                                        auth_len,
+                                        signature,
+                                        sizeof(signature),
+                                        &signature_len) == 0U))
+  {
+    return 0U;
+  }
+  if ((use_enterprise_attestation == 0U) &&
+      (fido_crypto_sign_es256_der(credential->private_key,
+                                  auth_data,
+                                  auth_len,
+                                  client_data_hash,
+                                  signature,
+                                  sizeof(signature),
+                                  &signature_len) == 0U))
   {
     return 0U;
   }
@@ -4226,6 +4313,10 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
   {
     ctap_build_large_blob_key(credential, large_blob_key);
     map_count = 4U;
+  }
+  if (use_enterprise_attestation != 0U)
+  {
+    att_stmt_fields = 3U;
   }
 
   resp[off++] = CTAP_STATUS_OK;
@@ -4235,11 +4326,18 @@ static uint8_t build_make_credential_response(const uint8_t rp_id_hash[FIDO_SHA2
       (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(auth_data, auth_len, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(att_stmt_fields, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("alg", resp, resp_cap, &off) == 0U) ||
       (cbor_write_nint(-7, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("sig", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(signature, signature_len, resp, resp_cap, &off) == 0U))
+  {
+    return 0U;
+  }
+  if ((use_enterprise_attestation != 0U) &&
+      ((cbor_write_text("x5c", resp, resp_cap, &off) == 0U) ||
+       (cbor_write_array(1U, resp, resp_cap, &off) == 0U) ||
+       (cbor_write_bytes(k_ctap_attest_cert_der, sizeof(k_ctap_attest_cert_der), resp, resp_cap, &off) == 0U)))
   {
     return 0U;
   }
@@ -4436,7 +4534,6 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
   (void)fido_store_client_pin_get_always_uv(&always_uv);
   (void)fido_store_client_pin_get_min_len(&min_pin_length);
   (void)fido_store_client_pin_get_force_change(&force_pin_change);
-
   resp[off++] = CTAP_STATUS_OK;
   if ((cbor_write_map(15U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x01U, resp, resp_cap, &off) == 0U) ||
@@ -4454,7 +4551,7 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_map(14U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_map(15U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("rk", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("up", resp, resp_cap, &off) == 0U) ||
@@ -4482,6 +4579,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_text("largeBlobs", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("setMinPINLength", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("ep", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x05U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(1024U, resp, resp_cap, &off) == 0U) ||
@@ -4511,7 +4610,8 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x0FU, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(FIDO_CRED_BLOB_MAX, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x1FU, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_array(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_array(3U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(CTAP_CONFIG_SUBCMD_ENABLE_EP, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(CTAP_CONFIG_SUBCMD_ALWAYS_UV, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(CTAP_CONFIG_SUBCMD_SET_MIN_PIN_LEN, resp, resp_cap, &off) == 0U))
   {
@@ -5046,6 +5146,16 @@ static uint8_t usbd_ctap_min_handle_config(const uint8_t *req,
 
   switch (parsed.subcmd)
   {
+    case CTAP_CONFIG_SUBCMD_ENABLE_EP:
+      if (fido_store_client_pin_set_enterprise_attestation(1U) == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+      }
+      resp[0] = CTAP_STATUS_OK;
+      *resp_len = 1U;
+      ctap_diag_note_status(CTAP_STATUS_OK);
+      return USBD_CTAP_MIN_DONE;
+
     case CTAP_CONFIG_SUBCMD_SET_MIN_PIN_LEN:
       if ((parsed.has_new_min_pin_len == 0U) && (parsed.has_force_change_pin == 0U))
       {
@@ -5150,6 +5260,13 @@ static uint8_t usbd_ctap_min_handle_make_credential(const uint8_t *req,
   if ((cred_protect_policy == CTAP_CRED_PROTECT_UV_REQUIRED) && (pin_uv_verified == 0U))
   {
     cred_protect_policy = CTAP_CRED_PROTECT_UV_OR_CRED_ID_REQ;
+  }
+  if ((parsed.has_enterprise_attestation != 0U) && (parsed.enterprise_attestation != 0U))
+  {
+    if (ctap_get_enterprise_attestation_enabled() == 0U)
+    {
+      return usbd_ctap_min_error(CTAP_ERR_NOT_ALLOWED, resp, resp_cap, resp_len);
+    }
   }
   {
     uint8_t rp_id_hash[FIDO_SHA256_SIZE];
@@ -5504,6 +5621,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     uint8_t rp_id_hash[FIDO_SHA256_SIZE];
     uint8_t cred_protect_policy = 0U;
     uint8_t pin_uv_verified = 0U;
+    uint8_t use_enterprise_attestation = 0U;
 
     if ((parse_make_credential(req, req_len, &parsed) == 0U) ||
         (parsed.has_client_data_hash == 0U) ||
@@ -5528,6 +5646,14 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
     {
       cred_protect_policy = CTAP_CRED_PROTECT_UV_OR_CRED_ID_REQ;
     }
+    if ((parsed.has_enterprise_attestation != 0U) && (parsed.enterprise_attestation != 0U))
+    {
+      if (ctap_get_enterprise_attestation_enabled() == 0U)
+      {
+        return usbd_ctap_min_error(CTAP_ERR_NOT_ALLOWED, resp, resp_cap, resp_len);
+      }
+      use_enterprise_attestation = 1U;
+    }
     if ((fido_store_register(rp_id_hash,
                              parsed.rp_id,
                              parsed.client_data_hash,
@@ -5546,6 +5672,7 @@ uint8_t usbd_ctap_min_complete_pending(const uint8_t *req,
                                         (uint8_t)(parsed.cred_blob_len != 0U),
                                         parsed.hmac_secret_requested,
                                         parsed.large_blob_key_requested,
+                                        use_enterprise_attestation,
                                         pin_uv_verified,
                                         resp,
                                         resp_cap,

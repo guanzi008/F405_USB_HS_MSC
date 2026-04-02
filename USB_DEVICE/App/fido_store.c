@@ -13,7 +13,8 @@
 #define FIDO_STORE_CONFIG_MAGIC   0x554C4650u
 #define FIDO_STORE_CONFIG_VERSION_V1 0x0001u
 #define FIDO_STORE_CONFIG_VERSION_V2 0x0002u
-#define FIDO_STORE_CONFIG_VERSION    0x0003u
+#define FIDO_STORE_CONFIG_VERSION_V3 0x0003u
+#define FIDO_STORE_CONFIG_VERSION    0x0004u
 #define FIDO_STORE_LARGEBLOB_MAGIC   0x554C4642u
 #define FIDO_STORE_LARGEBLOB_VERSION 0x0001u
 
@@ -49,6 +50,7 @@ typedef struct
   uint8_t force_pin_change;
   uint8_t always_uv;
   uint8_t pin_length;
+  uint8_t enterprise_attestation;
 } fido_store_config_t;
 
 typedef struct
@@ -162,7 +164,46 @@ static uint8_t fido_store_config_valid(const fido_store_config_t *config)
                    (config->magic == FIDO_STORE_CONFIG_MAGIC) &&
                    ((config->version == FIDO_STORE_CONFIG_VERSION_V1) ||
                     (config->version == FIDO_STORE_CONFIG_VERSION_V2) ||
+                    (config->version == FIDO_STORE_CONFIG_VERSION_V3) ||
                     (config->version == FIDO_STORE_CONFIG_VERSION)));
+}
+
+static void fido_store_config_init_defaults(fido_store_config_t *config)
+{
+  if (config == NULL)
+  {
+    return;
+  }
+
+  memset(config, 0, sizeof(*config));
+  config->magic = FIDO_STORE_CONFIG_MAGIC;
+  config->version = FIDO_STORE_CONFIG_VERSION;
+}
+
+static uint8_t fido_store_config_load(fido_store_config_t *config)
+{
+  if (config == NULL)
+  {
+    return 0U;
+  }
+
+  fido_store_config_init_defaults(config);
+  if ((fido_store_read_config(config) == 0U) || (fido_store_config_valid(config) == 0U))
+  {
+    return 0U;
+  }
+  if (config->version < FIDO_STORE_CONFIG_VERSION_V2)
+  {
+    config->min_pin_length = 0U;
+    config->force_pin_change = 0U;
+    config->always_uv = 0U;
+  }
+  if (config->version < FIDO_STORE_CONFIG_VERSION)
+  {
+    config->enterprise_attestation = 0U;
+  }
+  config->version = FIDO_STORE_CONFIG_VERSION;
+  return 1U;
 }
 
 static uint8_t fido_store_largeblob_valid(const fido_store_largeblob_t *largeblob)
@@ -736,25 +777,16 @@ uint8_t fido_store_client_pin_get_hash(uint8_t pin_hash16[16])
 uint8_t fido_store_client_pin_set_hash(const uint8_t pin_hash16[16], uint8_t pin_len)
 {
   fido_store_config_t config;
-  fido_store_config_t old_config;
 
   if ((pin_hash16 == NULL) || (pin_len == 0U) || (fido_store_is_ready() == 0U))
   {
     return 0U;
   }
 
-  memset(&config, 0, sizeof(config));
-  memset(&old_config, 0, sizeof(old_config));
-  if ((fido_store_read_config(&old_config) != 0U) && (fido_store_config_valid(&old_config) != 0U))
-  {
-    config.min_pin_length = (old_config.version >= FIDO_STORE_CONFIG_VERSION_V2) ? old_config.min_pin_length : 0U;
-    config.force_pin_change = 0U;
-    config.always_uv = (old_config.version >= FIDO_STORE_CONFIG_VERSION_V2) ? old_config.always_uv : 0U;
-  }
-  config.magic = FIDO_STORE_CONFIG_MAGIC;
-  config.version = FIDO_STORE_CONFIG_VERSION;
+  (void)fido_store_config_load(&config);
   config.pin_is_set = 1U;
   config.pin_length = pin_len;
+  config.force_pin_change = 0U;
   memcpy(config.pin_hash16, pin_hash16, 16U);
   return fido_store_write_config(&config);
 }
@@ -786,7 +818,7 @@ uint8_t fido_store_client_pin_get_len(uint8_t *pin_len)
     return 0U;
   }
 
-  if (config.version >= FIDO_STORE_CONFIG_VERSION)
+  if (config.version >= FIDO_STORE_CONFIG_VERSION_V3)
   {
     *pin_len = config.pin_length;
     return 1U;
@@ -830,16 +862,9 @@ uint8_t fido_store_client_pin_set_min_len(uint8_t min_len)
   {
     return 0U;
   }
-  memset(&config, 0, sizeof(config));
-  if ((fido_store_read_config(&config) == 0U) || (fido_store_config_valid(&config) == 0U))
+  if (fido_store_config_load(&config) == 0U)
   {
-    config.magic = FIDO_STORE_CONFIG_MAGIC;
-    config.version = FIDO_STORE_CONFIG_VERSION;
-    config.pin_is_set = 0U;
-  }
-  else if (config.version < FIDO_STORE_CONFIG_VERSION)
-  {
-    config.version = FIDO_STORE_CONFIG_VERSION;
+    fido_store_config_init_defaults(&config);
   }
   config.min_pin_length = min_len;
   if ((config.pin_is_set != 0U) && ((config.pin_length == 0U) || (config.pin_length < min_len)))
@@ -883,16 +908,9 @@ uint8_t fido_store_client_pin_set_force_change(uint8_t force_change)
   {
     return 0U;
   }
-  memset(&config, 0, sizeof(config));
-  if ((fido_store_read_config(&config) == 0U) || (fido_store_config_valid(&config) == 0U))
+  if (fido_store_config_load(&config) == 0U)
   {
-    config.magic = FIDO_STORE_CONFIG_MAGIC;
-    config.version = FIDO_STORE_CONFIG_VERSION;
-    config.pin_is_set = 0U;
-  }
-  else if (config.version < FIDO_STORE_CONFIG_VERSION)
-  {
-    config.version = FIDO_STORE_CONFIG_VERSION;
+    fido_store_config_init_defaults(&config);
   }
   config.force_pin_change = (uint8_t)(force_change != 0U ? 1U : 0U);
   return fido_store_write_config(&config);
@@ -932,18 +950,45 @@ uint8_t fido_store_client_pin_set_always_uv(uint8_t always_uv)
   {
     return 0U;
   }
-  memset(&config, 0, sizeof(config));
-  if ((fido_store_read_config(&config) == 0U) || (fido_store_config_valid(&config) == 0U))
+  if (fido_store_config_load(&config) == 0U)
   {
-    config.magic = FIDO_STORE_CONFIG_MAGIC;
-    config.version = FIDO_STORE_CONFIG_VERSION;
-    config.pin_is_set = 0U;
-  }
-  else if (config.version < FIDO_STORE_CONFIG_VERSION)
-  {
-    config.version = FIDO_STORE_CONFIG_VERSION;
+    fido_store_config_init_defaults(&config);
   }
   config.always_uv = (uint8_t)(always_uv != 0U ? 1U : 0U);
+  return fido_store_write_config(&config);
+}
+
+uint8_t fido_store_client_pin_get_enterprise_attestation(uint8_t *enterprise_attestation)
+{
+  fido_store_config_t config;
+
+  if ((enterprise_attestation == NULL) || (fido_store_is_ready() == 0U))
+  {
+    return 0U;
+  }
+  if (fido_store_config_load(&config) == 0U)
+  {
+    *enterprise_attestation = 0U;
+    return 0U;
+  }
+
+  *enterprise_attestation = (uint8_t)(config.enterprise_attestation != 0U ? 1U : 0U);
+  return 1U;
+}
+
+uint8_t fido_store_client_pin_set_enterprise_attestation(uint8_t enterprise_attestation)
+{
+  fido_store_config_t config;
+
+  if (fido_store_is_ready() == 0U)
+  {
+    return 0U;
+  }
+  if (fido_store_config_load(&config) == 0U)
+  {
+    fido_store_config_init_defaults(&config);
+  }
+  config.enterprise_attestation = (uint8_t)(enterprise_attestation != 0U ? 1U : 0U);
   return fido_store_write_config(&config);
 }
 

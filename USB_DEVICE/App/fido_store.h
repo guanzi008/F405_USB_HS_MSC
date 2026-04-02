@@ -83,6 +83,8 @@ uint8_t fido_store_client_pin_get_force_change(uint8_t *force_change);
 uint8_t fido_store_client_pin_set_force_change(uint8_t force_change);
 uint8_t fido_store_client_pin_get_always_uv(uint8_t *always_uv);
 uint8_t fido_store_client_pin_set_always_uv(uint8_t always_uv);
+uint8_t fido_store_client_pin_get_enterprise_attestation(uint8_t *enterprise_attestation);
+uint8_t fido_store_client_pin_set_enterprise_attestation(uint8_t enterprise_attestation);
 uint8_t fido_store_largeblob_read(uint16_t offset,
                                   uint8_t *data,
                                   uint16_t data_cap,
