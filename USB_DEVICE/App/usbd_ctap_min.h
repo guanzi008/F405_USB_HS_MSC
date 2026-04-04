@@ -14,6 +14,7 @@
 #define CTAP_CMD_SELECTION       0x0BU
 #define CTAP_CMD_LARGE_BLOBS     0x0CU
 #define CTAP_CMD_CONFIG          0x0DU
+#define CTAP_CMD_BIO_ENROLL_PRE  0x40U
 #define CTAP_CMD_CRED_MGMT_PRE   0x41U
 
 #define CTAP_STATUS_OK                 0x00U

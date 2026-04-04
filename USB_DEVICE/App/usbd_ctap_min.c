@@ -117,6 +117,10 @@
    CTAP_PIN_PERMISSION_BE | CTAP_PIN_PERMISSION_LBW | CTAP_PIN_PERMISSION_ACFG | \
    CTAP_PIN_PERMISSION_PCM)
 
+#define CTAP_BIO_MODALITY_FP     0x01U
+#define CTAP_BIO_INFO_TYPE_FP    0x02U
+#define CTAP_BIO_SUBCMD_GET_INFO 0x07U
+
 typedef struct
 {
   const uint8_t *buf;
@@ -4552,7 +4556,13 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_bytes(k_aaguid, sizeof(k_aaguid), resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x04U, resp, resp_cap, &off) == 0U) ||
+      /*
+       * Nested text-key maps must also be emitted in canonical CBOR order.
+       * libfido2/Windows rejects unsorted getInfo.options as invalid CBOR.
+       */
       (cbor_write_map(15U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("ep", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("rk", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("up", resp, resp_cap, &off) == 0U) ||
@@ -4561,28 +4571,26 @@ static uint8_t usbd_ctap_min_build_get_info(uint8_t *resp,
       (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("plat", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("makeCredUvNotRqd", resp, resp_cap, &off) == 0U) ||
-      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("alwaysUv", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(always_uv != 0U ? 1U : 0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("credMgmt", resp, resp_cap, &off) == 0U) ||
-      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("credentialMgmtPreview", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("authnrCfg", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("clientPin", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(fido_store_client_pin_is_set(), resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("pinUvAuthToken", resp, resp_cap, &off) == 0U) ||
-      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("noMcGaPermissionsWithClientPin", resp, resp_cap, &off) == 0U) ||
-      (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("largeBlobs", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("pinUvAuthToken", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_text("setMinPINLength", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
-      (cbor_write_text("ep", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("makeCredUvNotRqd", resp, resp_cap, &off) == 0U) ||
       (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("credentialMgmtPreview", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(1U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_text("noMcGaPermissionsWithClientPin", resp, resp_cap, &off) == 0U) ||
+      (cbor_write_bool(0U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x05U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(1024U, resp, resp_cap, &off) == 0U) ||
       (cbor_write_uint(0x06U, resp, resp_cap, &off) == 0U) ||
@@ -4880,6 +4888,81 @@ static uint8_t usbd_ctap_min_handle_client_pin(const uint8_t *req,
     default:
       return usbd_ctap_min_error(CTAP_ERR_INVALID_COMMAND, resp, resp_cap, resp_len);
   }
+}
+
+static uint8_t usbd_ctap_min_handle_bio_enroll_preview(const uint8_t *req,
+                                                       uint16_t req_len,
+                                                       uint8_t *resp,
+                                                       uint16_t resp_cap,
+                                                       uint16_t *resp_len)
+{
+  cbor_reader_t reader;
+  uint32_t pair_count;
+  uint32_t key;
+  uint32_t value;
+  uint32_t modality = 0U;
+  uint32_t subcmd = 0U;
+  uint16_t off = 1U;
+  uint32_t i;
+
+  if ((req == NULL) || (req_len < 2U))
+  {
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_LENGTH, resp, resp_cap, resp_len);
+  }
+
+  ctap_diag_note_request(CTAP_CMD_BIO_ENROLL_PRE, 0U, 0U, 0U);
+
+  reader.buf = &req[1];
+  reader.len = (uint16_t)(req_len - 1U);
+  reader.off = 0U;
+  if (cbor_enter_map(&reader, &pair_count) == 0U)
+  {
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_CBOR, resp, resp_cap, resp_len);
+  }
+
+  for (i = 0U; i < pair_count; ++i)
+  {
+    if ((cbor_read_uint(&reader, &key) == 0U) || (cbor_read_uint(&reader, &value) == 0U))
+    {
+      return usbd_ctap_min_error(CTAP_ERR_INVALID_CBOR, resp, resp_cap, resp_len);
+    }
+
+    switch (key)
+    {
+      case 0x01U:
+        modality = value;
+        break;
+      case 0x02U:
+        subcmd = value;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if ((modality != CTAP_BIO_MODALITY_FP) || (subcmd != CTAP_BIO_SUBCMD_GET_INFO))
+  {
+    return usbd_ctap_min_error(CTAP_ERR_INVALID_COMMAND, resp, resp_cap, resp_len);
+  }
+
+  /*
+   * Compatibility-only Bio Enrollment Preview GET_INFO response.
+   * This keeps strict hosts from aborting preflight on INVALID_COMMAND,
+   * without claiming real enroll/remove/template support.
+   */
+  resp[0] = CTAP_STATUS_OK;
+  if ((cbor_write_map(2U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x02U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(CTAP_BIO_INFO_TYPE_FP, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0x03U, resp, resp_cap, &off) == 0U) ||
+      (cbor_write_uint(0U, resp, resp_cap, &off) == 0U))
+  {
+    return usbd_ctap_min_error(CTAP_ERR_INTERNAL, resp, resp_cap, resp_len);
+  }
+
+  *resp_len = off;
+  ctap_diag_note_status(CTAP_STATUS_OK);
+  return USBD_CTAP_MIN_DONE;
 }
 
 static uint8_t usbd_ctap_min_handle_cred_mgmt(const uint8_t *req,
@@ -5516,6 +5599,14 @@ uint8_t usbd_ctap_min_handle_cbor(const uint8_t *req,
       s_ctap_selection_index = 0U;
       ctap_credman_reset_state();
       return usbd_ctap_min_handle_client_pin(req, req_len, resp, resp_cap, resp_len);
+
+    case CTAP_CMD_BIO_ENROLL_PRE:
+      s_ctap_ui_state = USBD_CTAP_UI_IDLE;
+      s_ctap_pending_cmd = 0U;
+      s_ctap_selection_count = 0U;
+      s_ctap_selection_index = 0U;
+      ctap_credman_reset_state();
+      return usbd_ctap_min_handle_bio_enroll_preview(req, req_len, resp, resp_cap, resp_len);
 
     case CTAP_CMD_SELECTION:
       ctap_diag_note_request(CTAP_CMD_SELECTION, 0U, 0U, 0U);

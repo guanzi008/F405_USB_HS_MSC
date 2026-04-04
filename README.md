@@ -28,12 +28,18 @@
 
 - 当 `alwaysUv = true` 时，设备会按规范禁用 `CTAP1/U2F REGISTER / AUTHENTICATE`
 - 此时 `getInfo.versions` 不再返回 `U2F_V2`
+- `authenticatorGetInfo`
+  - 已按 canonical CBOR 输出嵌套 `options` map
+  - 已补 `Windows/libfido2` 预检兼容字段与顺序问题
 - `ClientPIN`
   - `getRetries`
   - `getKeyAgreement`
   - `setPIN`
   - `changePIN`
   - `getPINToken`
+- `Bio Enrollment Preview`
+  - 已补最小 `0x40` `getInfo` 兼容响应
+  - 当前仅用于主机预检兼容，不提供真实生物录入能力
 - `authenticatorConfig`
   - `toggleAlwaysUv`
   - `setMinPINLength`
@@ -54,6 +60,7 @@
 当前仍在继续补全：
 
 - Windows Hello 账户登录场景的进一步兼容
+- Windows 预触摸探测链的剩余兼容细节
 
 ## 目录
 
@@ -238,7 +245,7 @@ fido2-token -I /dev/hidrawX
 
 ## 已知边界
 
-- Windows Hello 的 `PIN / reset` 管理链已经推进，但“直接作为 Windows 账户登录密钥”的兼容还没有完全收口。
+- Windows Hello 的 `PIN / reset` 管理链已经推进，`getInfo` 与 `bio preview getInfo` 的预检兼容也已补；但“直接作为 Windows 账户登录密钥”的兼容还没有完全收口。
 - `authenticatorLargeBlobs` 命令面已经实现，当前 `maxlargeblob = 3824`。
 - 更完整的 `credMgmt`、更完整的 CTAP2.1 扩展仍在继续补。
 - 当前文档以 Linux 开发和调试流程为主。
