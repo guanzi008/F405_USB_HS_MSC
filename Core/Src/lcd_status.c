@@ -3,18 +3,20 @@
 #include "lcd_zh.h"
 #include "ls013_lcd.h"
 #include "usbd_ctap_min.h"
+#include "wouo_ls013.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#define LCD_TEXT_X 10u
-#define LCD_TEXT_Y0 42u
-#define LCD_TEXT_PITCH 12u
-#define LCD_TEXT_CLEAR_H 10u
-#define LCD_MENU_Y0 34u
-#define LCD_MENU_PITCH 14u
 #define LCD_APP_COUNT 6u
 #define LCD_FIDO_RESERVED_BYTES (1024u * 1024u)
+#define LCD_WOUO_SCALE 16
+#define LCD_WOUO_FRAME_MS 33u
+#define LCD_WOUO_LIST_LINE_H 15
+#define LCD_WOUO_LIST_TEXT_Y 4
+#define LCD_WOUO_TILE_ICON_W 34
+#define LCD_WOUO_TILE_ICON_H 34
+#define LCD_WOUO_TILE_STEP 44
 
 static uint8_t s_lcd_ready;
 static uint8_t s_last_dev_state;
@@ -57,105 +59,56 @@ static uint8_t s_fido_delete_progress;
 static uint16_t s_last_fido_delete_count;
 static uint16_t s_last_fido_delete_index;
 static char s_last_fido_delete_name[32];
+static uint32_t s_last_anim_ms;
+static int16_t s_wouo_tile_x;
+static int16_t s_wouo_tile_x_trg;
+static int16_t s_wouo_tile_y;
+static int16_t s_wouo_tile_y_trg;
+static int16_t s_wouo_title_y;
+static int16_t s_wouo_title_y_trg;
+static int16_t s_wouo_indi_w;
+static int16_t s_wouo_indi_w_trg;
+static int16_t s_wouo_list_y;
+static int16_t s_wouo_list_y_trg;
+static int16_t s_wouo_list_box_y;
+static int16_t s_wouo_list_box_y_trg;
+static int16_t s_wouo_list_box_w;
+static int16_t s_wouo_list_box_w_trg;
+static int16_t s_wouo_list_bar_y;
+static int16_t s_wouo_list_bar_y_trg;
+static int16_t s_wouo_popup_y;
+static int16_t s_wouo_popup_y_trg;
+static uint8_t s_wouo_anim_active;
+static uint8_t s_wouo_last_menu_index;
+static uint8_t s_wouo_last_menu_active;
+static uint8_t s_wouo_last_active_app;
 
-static const uint8_t *font5x7_get(char ch) {
-    static const uint8_t blank[5] = {0, 0, 0, 0, 0};
-    switch (ch) {
-        case 'A': { static const uint8_t g[5] = {0x7e, 0x09, 0x09, 0x09, 0x7e}; return g; }
-        case 'B': { static const uint8_t g[5] = {0x7f, 0x49, 0x49, 0x49, 0x36}; return g; }
-        case 'C': { static const uint8_t g[5] = {0x3e, 0x41, 0x41, 0x41, 0x22}; return g; }
-        case 'D': { static const uint8_t g[5] = {0x7f, 0x41, 0x41, 0x22, 0x1c}; return g; }
-        case 'E': { static const uint8_t g[5] = {0x7f, 0x49, 0x49, 0x49, 0x41}; return g; }
-        case 'F': { static const uint8_t g[5] = {0x7f, 0x09, 0x09, 0x09, 0x01}; return g; }
-        case 'G': { static const uint8_t g[5] = {0x3e, 0x41, 0x49, 0x49, 0x7a}; return g; }
-        case 'H': { static const uint8_t g[5] = {0x7f, 0x08, 0x08, 0x08, 0x7f}; return g; }
-        case 'I': { static const uint8_t g[5] = {0x00, 0x41, 0x7f, 0x41, 0x00}; return g; }
-        case 'J': { static const uint8_t g[5] = {0x20, 0x40, 0x41, 0x3f, 0x01}; return g; }
-        case 'K': { static const uint8_t g[5] = {0x7f, 0x08, 0x14, 0x22, 0x41}; return g; }
-        case 'L': { static const uint8_t g[5] = {0x7f, 0x40, 0x40, 0x40, 0x40}; return g; }
-        case 'M': { static const uint8_t g[5] = {0x7f, 0x02, 0x0c, 0x02, 0x7f}; return g; }
-        case 'N': { static const uint8_t g[5] = {0x7f, 0x04, 0x08, 0x10, 0x7f}; return g; }
-        case 'O': { static const uint8_t g[5] = {0x3e, 0x41, 0x41, 0x41, 0x3e}; return g; }
-        case 'P': { static const uint8_t g[5] = {0x7f, 0x09, 0x09, 0x09, 0x06}; return g; }
-        case 'Q': { static const uint8_t g[5] = {0x3e, 0x41, 0x51, 0x21, 0x5e}; return g; }
-        case 'R': { static const uint8_t g[5] = {0x7f, 0x09, 0x19, 0x29, 0x46}; return g; }
-        case 'S': { static const uint8_t g[5] = {0x46, 0x49, 0x49, 0x49, 0x31}; return g; }
-        case 'T': { static const uint8_t g[5] = {0x01, 0x01, 0x7f, 0x01, 0x01}; return g; }
-        case 'U': { static const uint8_t g[5] = {0x3f, 0x40, 0x40, 0x40, 0x3f}; return g; }
-        case 'V': { static const uint8_t g[5] = {0x1f, 0x20, 0x40, 0x20, 0x1f}; return g; }
-        case 'W': { static const uint8_t g[5] = {0x3f, 0x40, 0x38, 0x40, 0x3f}; return g; }
-        case 'X': { static const uint8_t g[5] = {0x63, 0x14, 0x08, 0x14, 0x63}; return g; }
-        case 'Y': { static const uint8_t g[5] = {0x07, 0x08, 0x70, 0x08, 0x07}; return g; }
-        case 'Z': { static const uint8_t g[5] = {0x61, 0x51, 0x49, 0x45, 0x43}; return g; }
-        case '0': { static const uint8_t g[5] = {0x3e, 0x41, 0x41, 0x41, 0x3e}; return g; }
-        case '1': { static const uint8_t g[5] = {0x00, 0x42, 0x7f, 0x40, 0x00}; return g; }
-        case '2': { static const uint8_t g[5] = {0x42, 0x61, 0x51, 0x49, 0x46}; return g; }
-        case '3': { static const uint8_t g[5] = {0x21, 0x41, 0x49, 0x4d, 0x32}; return g; }
-        case '4': { static const uint8_t g[5] = {0x18, 0x14, 0x12, 0x7f, 0x10}; return g; }
-        case '5': { static const uint8_t g[5] = {0x27, 0x45, 0x45, 0x45, 0x39}; return g; }
-        case '6': { static const uint8_t g[5] = {0x3e, 0x49, 0x49, 0x49, 0x32}; return g; }
-        case '7': { static const uint8_t g[5] = {0x01, 0x71, 0x09, 0x05, 0x03}; return g; }
-        case '8': { static const uint8_t g[5] = {0x36, 0x49, 0x49, 0x49, 0x36}; return g; }
-        case '9': { static const uint8_t g[5] = {0x26, 0x49, 0x49, 0x49, 0x3e}; return g; }
-        case '.': { static const uint8_t g[5] = {0x00, 0x60, 0x60, 0x00, 0x00}; return g; }
-        case '#': { static const uint8_t g[5] = {0x14, 0x7f, 0x14, 0x7f, 0x14}; return g; }
-        case ':': { static const uint8_t g[5] = {0x00, 0x36, 0x36, 0x00, 0x00}; return g; }
-        case '-': { static const uint8_t g[5] = {0x08, 0x08, 0x08, 0x08, 0x08}; return g; }
-        case '>': { static const uint8_t g[5] = {0x00, 0x41, 0x22, 0x14, 0x08}; return g; }
-        case '/': { static const uint8_t g[5] = {0x20, 0x10, 0x08, 0x04, 0x02}; return g; }
-        case '+': { static const uint8_t g[5] = {0x08, 0x08, 0x3e, 0x08, 0x08}; return g; }
-        case '_': { static const uint8_t g[5] = {0x40, 0x40, 0x40, 0x40, 0x40}; return g; }
-        case ' ': return blank;
-        default: { static const uint8_t g[5] = {0x02, 0x01, 0x59, 0x09, 0x06}; return g; }
-    }
-}
+typedef struct {
+    lcd_zh_id_t title;
+    const char *name;
+    const char *hint;
+} lcd_wouo_app_t;
 
-static void lcd_draw_char(uint8_t x, uint8_t y, char ch) {
-    const uint8_t *glyph;
-    uint8_t col;
-    uint8_t row;
-
-    if (ch >= 'a' && ch <= 'z') {
-        ch = (char)(ch - 'a' + 'A');
-    }
-
-    glyph = font5x7_get(ch);
-    ls013_lcd_rect(x, y, 6u, 8u, 0u);
-    for (col = 0u; col < 5u; ++col) {
-        uint8_t bits = glyph[col];
-        for (row = 0u; row < 7u; ++row) {
-            if (((bits >> row) & 0x01u) != 0u) {
-                ls013_lcd_set_pixel((uint8_t)(x + col), (uint8_t)(y + row), 1u);
-            }
-        }
-    }
-}
-
-static void lcd_draw_text_line(uint8_t row, const char *text) {
-    uint8_t x = LCD_TEXT_X;
-    uint8_t y = (uint8_t)(LCD_TEXT_Y0 + row * LCD_TEXT_PITCH);
-
-    ls013_lcd_rect(LCD_TEXT_X, (uint8_t)(y - 1u), 108u, LCD_TEXT_CLEAR_H, 0u);
-    while (*text != '\0' && x <= 118u) {
-        lcd_draw_char(x, y, *text++);
-        x = (uint8_t)(x + 6u);
-    }
-}
+static const lcd_wouo_app_t s_wouo_apps[LCD_APP_COUNT] = {
+    {LCD_ZH_MENU_USB_DEBUG, "USB", "CMSIS-DAP"},
+    {LCD_ZH_MENU_SECURITY_KEY, "KEY", "FIDO/CTAP"},
+    {LCD_ZH_MENU_SPI_FLASH, "FLASH", "W25Q MSC"},
+    {LCD_ZH_MENU_INPUT_DEV, "INPUT", "ENCODER"},
+    {LCD_ZH_MENU_WIPE_KEY, "WIPE", "CLEAR"},
+    {LCD_ZH_MENU_DELETE_KEY, "DEL", "CREDENTIAL"},
+};
 
 static void lcd_draw_text_at(uint8_t x, uint8_t y, uint8_t clear_w, const char *text)
 {
-    uint8_t draw_x = x;
+    wouo_draw_text_6x8(x, y, clear_w, text, 1u, 0u);
+}
 
-    ls013_lcd_rect(x, (uint8_t)(y - 1u), clear_w, LCD_TEXT_CLEAR_H, 0u);
-    while (*text != '\0' && draw_x < (uint8_t)(x + clear_w - 5u)) {
-        lcd_draw_char(draw_x, y, *text++);
-        draw_x = (uint8_t)(draw_x + 6u);
-    }
+static void lcd_draw_text_color_at(uint8_t x, uint8_t y, uint8_t clear_w, const char *text, uint8_t fg, uint8_t bg)
+{
+    wouo_draw_text_6x8(x, y, clear_w, text, fg, bg);
 }
 
 static void lcd_draw_bitmap_1bpp_color(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height, uint8_t on);
-static void lcd_draw_menu_plus(uint8_t x, uint8_t y);
-static void lcd_draw_menu_arrow(uint8_t x, uint8_t y);
 
 static void lcd_draw_zh_at(uint8_t x, uint8_t y, uint8_t clear_w, lcd_zh_id_t id)
 {
@@ -180,151 +133,228 @@ static void lcd_draw_zh_invert_at(uint8_t x, uint8_t y, lcd_zh_id_t id)
     lcd_draw_bitmap_1bpp_color(x, y, bmp->data, bmp->width, bmp->height, 0u);
 }
 
-static void lcd_draw_zh_title_invert_at(uint8_t x, uint8_t y, lcd_zh_id_t id)
-{
-    const lcd_zh_bitmap_t *bmp = lcd_zh_get(id);
-
-    if (bmp == NULL) {
-        return;
-    }
-
-    lcd_draw_bitmap_1bpp_color(x, y, bmp->data, bmp->width, bmp->height, 0u);
-}
-
 static void lcd_draw_bitmap_1bpp_color(uint8_t x, uint8_t y, const uint8_t *bitmap, uint8_t width, uint8_t height, uint8_t on)
 {
-    uint8_t row_bytes;
-    uint8_t row;
-    uint8_t col;
-
-    if (bitmap == NULL) {
-        return;
-    }
-
-    row_bytes = (uint8_t)((width + 7u) / 8u);
-    for (row = 0u; row < height; ++row) {
-        for (col = 0u; col < width; ++col) {
-            uint8_t byte = bitmap[(uint16_t)row * row_bytes + (uint16_t)(col >> 3)];
-            uint8_t bit = (uint8_t)(0x80u >> (col & 7u));
-            if ((byte & bit) != 0u) {
-                ls013_lcd_set_pixel((uint8_t)(x + col), (uint8_t)(y + row), on);
-            }
-        }
-    }
-}
-
-static void lcd_draw_menu_plus(uint8_t x, uint8_t y)
-{
-    ls013_lcd_hline(x, (uint8_t)(y + 3u), 5u, 1u);
-    ls013_lcd_vline((uint8_t)(x + 2u), (uint8_t)(y + 1u), 5u, 1u);
-}
-
-static void lcd_draw_menu_arrow(uint8_t x, uint8_t y)
-{
-    ls013_lcd_hline(x, (uint8_t)(y + 3u), 5u, 1u);
-    ls013_lcd_hline(x, (uint8_t)(y + 4u), 5u, 1u);
-    ls013_lcd_hline((uint8_t)(x + 4u), (uint8_t)(y + 2u), 3u, 1u);
-    ls013_lcd_hline((uint8_t)(x + 4u), (uint8_t)(y + 5u), 3u, 1u);
-    ls013_lcd_hline((uint8_t)(x + 6u), (uint8_t)(y + 3u), 2u, 1u);
-    ls013_lcd_hline((uint8_t)(x + 6u), (uint8_t)(y + 4u), 2u, 1u);
-}
-
-static void lcd_draw_title_badge(lcd_zh_id_t title_id)
-{
-    const lcd_zh_bitmap_t *title_bmp = lcd_zh_get(title_id);
-    uint8_t badge_w;
-    uint8_t badge_h;
-    uint8_t badge_x = 10u;
-    uint8_t badge_y = 8u;
-    uint8_t text_x;
-    uint8_t text_y;
-
-    if (title_bmp == NULL) {
-        return;
-    }
-
-    badge_w = (uint8_t)(title_bmp->width + 10u);
-    badge_h = 18u;
-    text_x = (uint8_t)(badge_x + 5u);
-    text_y = (uint8_t)(badge_y + ((badge_h - title_bmp->height) / 2u));
-    ls013_lcd_rect(badge_x, badge_y, badge_w, badge_h, 1u);
-    lcd_draw_zh_title_invert_at(text_x, text_y, title_id);
-    ls013_lcd_hline(8u, (uint8_t)(badge_y + badge_h + 4u), 112u, 1u);
+    wouo_draw_bitmap_rows(x, y, bitmap, width, height, on);
 }
 
 static void lcd_draw_progress_bar(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t progress)
 {
-    uint8_t inner_w;
-    uint8_t fill_w;
+    wouo_draw_progress_bar(x, y, w, h, progress);
+}
 
-    ls013_lcd_frame(x, y, w, h, 1u);
-    if ((w <= 2u) || (h <= 2u)) {
+static int16_t lcd_wouo_px(int16_t value)
+{
+    return (int16_t)(value / LCD_WOUO_SCALE);
+}
+
+static uint8_t lcd_wouo_anim(int16_t *value, int16_t target, uint8_t weight)
+{
+    return wouo_anim_i16(value, target, weight);
+}
+
+static void lcd_wouo_prepare_menu_anim(uint8_t force)
+{
+    int16_t target_x = (int16_t)((64 - (LCD_WOUO_TILE_ICON_W / 2) -
+                                  ((int16_t)s_menu_index * LCD_WOUO_TILE_STEP)) * LCD_WOUO_SCALE);
+
+    s_wouo_tile_x_trg = target_x;
+    s_wouo_tile_y_trg = 14 * LCD_WOUO_SCALE;
+    s_wouo_title_y_trg = 61 * LCD_WOUO_SCALE;
+    s_wouo_indi_w_trg = 10 * LCD_WOUO_SCALE;
+    if (force != 0u) {
+        s_wouo_tile_x = target_x;
+        s_wouo_tile_y = -LCD_WOUO_TILE_ICON_H * LCD_WOUO_SCALE;
+        s_wouo_title_y = 94 * LCD_WOUO_SCALE;
+        s_wouo_indi_w = 0;
+    }
+    s_wouo_anim_active = 1u;
+}
+
+static void lcd_wouo_prepare_list_anim(uint8_t force)
+{
+    uint8_t selected = 0u;
+    uint8_t width = 54u;
+
+    if (s_active_app == LCD_STATUS_APP_DELETE_KEY && s_last_fido_delete_count != 0u) {
+        selected = 2u;
+        width = 96u;
+    } else if (s_active_app == LCD_STATUS_APP_WIPE) {
+        selected = 2u;
+        width = 86u;
+    } else if (s_active_app == LCD_STATUS_APP_SECURITY && s_last_fido_ui_state == USBD_CTAP_UI_WAIT_TOUCH) {
+        selected = 4u;
+        width = 86u;
+    }
+
+    s_wouo_list_y_trg = 0;
+    s_wouo_list_box_y_trg = (int16_t)((20 + ((int16_t)selected * LCD_WOUO_LIST_LINE_H)) * LCD_WOUO_SCALE);
+    s_wouo_list_box_w_trg = (int16_t)(width * LCD_WOUO_SCALE);
+    s_wouo_list_bar_y_trg = (int16_t)(((selected + 1u) * 18u) * LCD_WOUO_SCALE);
+    if (force != 0u) {
+        s_wouo_list_y = 16 * LCD_WOUO_SCALE;
+        s_wouo_list_box_y = 0;
+        s_wouo_list_box_w = 0;
+        s_wouo_list_bar_y = 0;
+    }
+    s_wouo_anim_active = 1u;
+}
+
+static void lcd_wouo_step_anim(void)
+{
+    uint8_t active = 0u;
+
+    active |= lcd_wouo_anim(&s_wouo_tile_x, s_wouo_tile_x_trg, 4u);
+    active |= lcd_wouo_anim(&s_wouo_tile_y, s_wouo_tile_y_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_title_y, s_wouo_title_y_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_indi_w, s_wouo_indi_w_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_list_y, s_wouo_list_y_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_list_box_y, s_wouo_list_box_y_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_list_box_w, s_wouo_list_box_w_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_list_bar_y, s_wouo_list_bar_y_trg, 5u);
+    active |= lcd_wouo_anim(&s_wouo_popup_y, s_wouo_popup_y_trg, 4u);
+    s_wouo_anim_active = active;
+}
+
+static void lcd_draw_wouo_scroll_bar(uint8_t y)
+{
+    ls013_lcd_hline(122u, 4u, 5u, 1u);
+    ls013_lcd_hline(122u, 123u, 5u, 1u);
+    ls013_lcd_vline(124u, 4u, 120u, 1u);
+    if (y > 118u) {
+        y = 118u;
+    }
+    ls013_lcd_rect(122u, y, 5u, 8u, 1u);
+}
+
+static void lcd_draw_wouo_list_row(uint8_t row, const char *text, uint8_t selected)
+{
+    uint8_t y = (uint8_t)(20u + (row * LCD_WOUO_LIST_LINE_H) + lcd_wouo_px(s_wouo_list_y));
+
+    if (y > 121u) {
         return;
     }
-
-    ls013_lcd_rect((uint8_t)(x + 1u), (uint8_t)(y + 1u), (uint8_t)(w - 2u), (uint8_t)(h - 2u), 0u);
-    inner_w = (uint8_t)(w - 4u);
-    fill_w = (uint8_t)(((uint16_t)inner_w * progress) / 100u);
-    if (fill_w != 0u) {
-        ls013_lcd_rect((uint8_t)(x + 2u), (uint8_t)(y + 2u), fill_w, (uint8_t)(h - 4u), 1u);
-    }
-}
-
-static void lcd_draw_shell(lcd_zh_id_t title_id) {
-    ls013_lcd_clear(0xFFu);
-    ls013_lcd_frame(0u, 0u, 128u, 128u, 1u);
-    ls013_lcd_frame(4u, 4u, 120u, 120u, 1u);
-    lcd_draw_title_badge(title_id);
-}
-
-static void lcd_draw_menu_shell(void)
-{
-    ls013_lcd_clear(0xFFu);
-    ls013_lcd_frame(0u, 0u, 128u, 128u, 1u);
-    ls013_lcd_frame(4u, 4u, 120u, 120u, 1u);
-    lcd_draw_title_badge(LCD_ZH_MENU);
-}
-
-static void lcd_draw_menu_item(uint8_t row, uint8_t selected, lcd_zh_id_t id)
-{
-    uint8_t y = (uint8_t)(LCD_MENU_Y0 + row * LCD_MENU_PITCH);
-
-    ls013_lcd_rect(LCD_TEXT_X, (uint8_t)(y - 1u), 112u, 14u, 0u);
     if (selected != 0u) {
-        lcd_draw_menu_arrow(LCD_TEXT_X, y);
+        ls013_lcd_rect(0u, (uint8_t)(y - 3u), (uint8_t)lcd_wouo_px(s_wouo_list_box_w), LCD_WOUO_LIST_LINE_H, 1u);
+        lcd_draw_text_color_at(5u, (uint8_t)(y + LCD_WOUO_LIST_TEXT_Y), 112u, text, 0u, 1u);
     } else {
-        lcd_draw_menu_plus((uint8_t)(LCD_TEXT_X + 1u), y);
+        lcd_draw_text_color_at(5u, (uint8_t)(y + LCD_WOUO_LIST_TEXT_Y), 112u, text, 1u, 0u);
     }
-    lcd_draw_zh_at((uint8_t)(LCD_TEXT_X + 16u), y, 96u, id);
+}
+
+static void lcd_draw_wouo_tag(uint8_t x, uint8_t y, lcd_zh_id_t title_id, uint8_t min_w)
+{
+    const lcd_zh_bitmap_t *bmp = lcd_zh_get(title_id);
+    uint8_t w;
+
+    if (bmp == NULL) {
+        return;
+    }
+    w = (uint8_t)(bmp->width + 10u);
+    if (w < min_w) {
+        w = min_w;
+    }
+    if ((uint16_t)x + w > 126u) {
+        w = (uint8_t)(126u - x);
+    }
+    ls013_lcd_rect(x, y, w, 15u, 1u);
+    lcd_draw_zh_invert_at((uint8_t)(x + 5u), (uint8_t)(y + 2u), title_id);
+}
+
+static void lcd_draw_wouo_icon(uint8_t index, int16_t x, uint8_t y, uint8_t selected)
+{
+    uint8_t x8;
+
+    if ((x < 0) || (x > 128)) {
+        return;
+    }
+    x8 = (uint8_t)x;
+    if (selected != 0u) {
+        ls013_lcd_rect(x8, y, LCD_WOUO_TILE_ICON_W, LCD_WOUO_TILE_ICON_H, 1u);
+        ls013_lcd_rect((uint8_t)(x8 + 3u), (uint8_t)(y + 3u),
+                       (uint8_t)(LCD_WOUO_TILE_ICON_W - 6u),
+                       (uint8_t)(LCD_WOUO_TILE_ICON_H - 6u), 0u);
+    } else {
+        ls013_lcd_frame(x8, y, LCD_WOUO_TILE_ICON_W, LCD_WOUO_TILE_ICON_H, 1u);
+    }
+
+    switch (index) {
+        case LCD_STATUS_APP_USB_DEBUG:
+            ls013_lcd_hline((uint8_t)(x8 + 9u), (uint8_t)(y + 10u), 16u, 1u);
+            ls013_lcd_vline((uint8_t)(x8 + 17u), (uint8_t)(y + 10u), 16u, 1u);
+            ls013_lcd_rect((uint8_t)(x8 + 12u), (uint8_t)(y + 23u), 11u, 5u, 1u);
+            break;
+        case LCD_STATUS_APP_SECURITY:
+            ls013_lcd_frame((uint8_t)(x8 + 10u), (uint8_t)(y + 15u), 15u, 13u, 1u);
+            ls013_lcd_frame((uint8_t)(x8 + 13u), (uint8_t)(y + 8u), 9u, 10u, 1u);
+            break;
+        case LCD_STATUS_APP_FLASH:
+            ls013_lcd_frame((uint8_t)(x8 + 8u), (uint8_t)(y + 9u), 18u, 18u, 1u);
+            ls013_lcd_hline((uint8_t)(x8 + 11u), (uint8_t)(y + 15u), 12u, 1u);
+            ls013_lcd_hline((uint8_t)(x8 + 11u), (uint8_t)(y + 21u), 12u, 1u);
+            break;
+        case LCD_STATUS_APP_INPUT:
+            ls013_lcd_frame((uint8_t)(x8 + 8u), (uint8_t)(y + 8u), 18u, 18u, 1u);
+            ls013_lcd_vline((uint8_t)(x8 + 17u), (uint8_t)(y + 11u), 12u, 1u);
+            ls013_lcd_hline((uint8_t)(x8 + 11u), (uint8_t)(y + 17u), 12u, 1u);
+            break;
+        case LCD_STATUS_APP_WIPE:
+            ls013_lcd_frame((uint8_t)(x8 + 10u), (uint8_t)(y + 9u), 14u, 19u, 1u);
+            ls013_lcd_hline((uint8_t)(x8 + 8u), (uint8_t)(y + 9u), 18u, 1u);
+            break;
+        default:
+            ls013_lcd_frame((uint8_t)(x8 + 9u), (uint8_t)(y + 13u), 16u, 12u, 1u);
+            ls013_lcd_hline((uint8_t)(x8 + 13u), (uint8_t)(y + 10u), 8u, 1u);
+            break;
+    }
+}
+
+static void lcd_draw_wouo_list_page(lcd_zh_id_t title_id)
+{
+    ls013_lcd_clear(0xFFu);
+    lcd_draw_wouo_tag(0u, 0u, title_id, 34u);
 }
 
 static void lcd_draw_menu_page(void) {
-    lcd_draw_menu_shell();
-    lcd_draw_menu_item(0u, s_menu_index == 0u, LCD_ZH_MENU_USB_DEBUG);
-    lcd_draw_menu_item(1u, s_menu_index == 1u, LCD_ZH_MENU_SECURITY_KEY);
-    lcd_draw_menu_item(2u, s_menu_index == 2u, LCD_ZH_MENU_SPI_FLASH);
-    lcd_draw_menu_item(3u, s_menu_index == 3u, LCD_ZH_MENU_INPUT_DEV);
-    lcd_draw_menu_item(4u, s_menu_index == 4u, LCD_ZH_MENU_WIPE_KEY);
-    lcd_draw_menu_item(5u, s_menu_index == 5u, LCD_ZH_MENU_DELETE_KEY);
+    uint8_t i;
+    uint8_t title_w;
+
+    ls013_lcd_clear(0xFFu);
+    for (i = 0u; i < LCD_APP_COUNT; ++i) {
+        lcd_draw_wouo_icon(i,
+                           (int16_t)(lcd_wouo_px(s_wouo_tile_x) + ((int16_t)i * LCD_WOUO_TILE_STEP)),
+                           (uint8_t)lcd_wouo_px(s_wouo_tile_y),
+                           (uint8_t)(i == s_menu_index));
+    }
+    ls013_lcd_rect(0u, 57u, (uint8_t)lcd_wouo_px(s_wouo_indi_w), 39u, 1u);
+    title_w = (uint8_t)(lcd_zh_get(s_wouo_apps[s_menu_index].title)->width + 8u);
+    if (title_w > 108u) {
+        title_w = 108u;
+    }
+    ls013_lcd_rect(12u, 60u, title_w, 18u, 1u);
+    lcd_draw_zh_invert_at(16u, (uint8_t)lcd_wouo_px(s_wouo_title_y), s_wouo_apps[s_menu_index].title);
+    lcd_draw_text_color_at(18u, 102u, 96u, s_wouo_apps[s_menu_index].hint, 1u, 0u);
+    lcd_draw_wouo_scroll_bar((uint8_t)(10u + (s_menu_index * 18u)));
 }
 
 static void lcd_draw_usb_page(void) {
     char line[24];
 
-    lcd_draw_shell(LCD_ZH_DEBUG);
+    lcd_draw_wouo_list_page(LCD_ZH_DEBUG);
     snprintf(line, sizeof(line), "DS:%u CFG:%u", s_last_dev_state, s_last_dev_config);
-    lcd_draw_text_line(0u, line);
+    lcd_draw_wouo_list_row(0u, line, 1u);
     snprintf(line, sizeof(line), "RST:%lu SET:%lu", s_last_reset_count, s_last_setup_count);
-    lcd_draw_text_line(1u, line);
+    lcd_draw_wouo_list_row(1u, line, 0u);
     snprintf(line, sizeof(line), "OUT:%lu IN:%lu", s_last_data_out_count, s_last_data_in_count);
-    lcd_draw_text_line(2u, line);
+    lcd_draw_wouo_list_row(2u, line, 0u);
     snprintf(line, sizeof(line), "SUSP:%lu", s_last_suspend_count);
-    lcd_draw_text_line(3u, line);
+    lcd_draw_wouo_list_row(3u, line, 0u);
     snprintf(line, sizeof(line), "DAPRX:%lu", s_last_dap_rx_count);
-    lcd_draw_text_line(4u, line);
+    lcd_draw_wouo_list_row(4u, line, 0u);
     snprintf(line, sizeof(line), "DAPTX:%lu", s_last_dap_tx_count);
-    lcd_draw_text_line(5u, line);
-    lcd_draw_text_line(6u, "USB CMSIS-DAP");
+    lcd_draw_wouo_list_row(5u, line, 0u);
+    lcd_draw_wouo_list_row(6u, "USB CMSIS-DAP", 0u);
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
 static void lcd_draw_security_page(void) {
@@ -332,7 +362,7 @@ static void lcd_draw_security_page(void) {
     const char *ui_text = "IDLE";
     const char *cmd_text = "--";
 
-    lcd_draw_shell(LCD_ZH_KEY);
+    lcd_draw_wouo_list_page(LCD_ZH_KEY);
     switch (s_last_fido_ui_state) {
         case 1u: ui_text = "WAIT"; break;
         case 2u: ui_text = "OK"; break;
@@ -347,127 +377,133 @@ static void lcd_draw_security_page(void) {
         default: cmd_text = "--"; break;
     }
     snprintf(line, sizeof(line), "RX:%lu TX:%lu", s_last_fido_rx_count, s_last_fido_tx_count);
-    lcd_draw_text_line(0u, line);
+    lcd_draw_wouo_list_row(0u, line, 1u);
     snprintf(line, sizeof(line), "REQ:%08lX", s_last_fido_last_req_word0);
-    lcd_draw_text_line(1u, line);
+    lcd_draw_wouo_list_row(1u, line, 0u);
     snprintf(line, sizeof(line), "RSP:%08lX", s_last_fido_last_rsp_word0);
-    lcd_draw_text_line(2u, line);
+    lcd_draw_wouo_list_row(2u, line, 0u);
     snprintf(line, sizeof(line), "STAT:%02lX", s_last_fido_last_status & 0xFFu);
-    lcd_draw_text_line(3u, line);
+    lcd_draw_wouo_list_row(3u, line, 0u);
     snprintf(line, sizeof(line), "UI:%s CMD:%s", ui_text, cmd_text);
-    lcd_draw_text_line(4u, line);
+    lcd_draw_wouo_list_row(4u, line, s_last_fido_ui_state == 1u);
     if (s_last_fido_ui_state == 1u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 104u, 108u, LCD_ZH_WAIT_CONFIRM);
+        lcd_draw_zh_at(6u, 101u, 108u, LCD_ZH_WAIT_CONFIRM);
     } else {
-        lcd_draw_zh_at(LCD_TEXT_X, 104u, 108u, LCD_ZH_BUTTON_CONFIRM);
+        lcd_draw_zh_at(6u, 101u, 108u, LCD_ZH_BUTTON_CONFIRM);
     }
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
 static void lcd_draw_flash_page(void) {
     char line[24];
 
-    lcd_draw_shell(LCD_ZH_FLASH);
+    lcd_draw_wouo_list_page(LCD_ZH_FLASH);
     if (s_last_flash_present != 0u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 40u, 112u, LCD_ZH_PRESENT);
+        lcd_draw_zh_at(6u, 24u, 112u, LCD_ZH_PRESENT);
         snprintf(line, sizeof(line), "ID:%06lX", s_last_flash_jedec_id & 0xFFFFFFu);
-        lcd_draw_text_line(1u, line);
+        lcd_draw_wouo_list_row(1u, line, 1u);
         snprintf(line, sizeof(line), "CAP:%luM", s_last_flash_capacity_bytes >> 20);
-        lcd_draw_text_line(2u, line);
+        lcd_draw_wouo_list_row(2u, line, 0u);
         snprintf(line, sizeof(line), "MODE:%u", s_last_flash_mode);
-        lcd_draw_text_line(3u, line);
+        lcd_draw_wouo_list_row(3u, line, 0u);
         snprintf(line, sizeof(line), "MSC:%luM", (s_last_flash_capacity_bytes - LCD_FIDO_RESERVED_BYTES) >> 20);
-        lcd_draw_text_line(4u, line);
-        lcd_draw_text_line(5u, "FIDO RESV:1M");
+        lcd_draw_wouo_list_row(4u, line, 0u);
+        lcd_draw_wouo_list_row(5u, "FIDO RESV:1M", 0u);
     } else {
-        lcd_draw_zh_at(LCD_TEXT_X, 44u, 112u, LCD_ZH_NOT_FOUND);
-        lcd_draw_zh_at(LCD_TEXT_X, 58u, 112u, LCD_ZH_CHECK_SPI1);
+        lcd_draw_zh_at(6u, 44u, 112u, LCD_ZH_NOT_FOUND);
+        lcd_draw_zh_at(6u, 62u, 112u, LCD_ZH_CHECK_SPI1);
     }
-    lcd_draw_text_line(6u, "PB3 PA6 PA7");
-    lcd_draw_text_line(7u, "CS:PA4");
+    lcd_draw_wouo_list_row(6u, "PB3 PA6 PA7", 0u);
+    lcd_draw_wouo_list_row(7u, "CS:PA4", 0u);
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
 static void lcd_draw_input_page(void) {
     char line[24];
 
-    lcd_draw_shell(LCD_ZH_INPUT);
+    lcd_draw_wouo_list_page(LCD_ZH_INPUT);
     snprintf(line, sizeof(line), "A:%u B:%u K:%u", s_last_enc_a, s_last_enc_b, s_last_enc_btn);
-    lcd_draw_text_line(0u, line);
+    lcd_draw_wouo_list_row(0u, line, 1u);
     snprintf(line, sizeof(line), "POS:%ld", (long)s_last_encoder_position);
-    lcd_draw_text_line(1u, line);
+    lcd_draw_wouo_list_row(1u, line, 0u);
     snprintf(line, sizeof(line), "EV:%08lX", s_last_events);
-    lcd_draw_text_line(2u, line);
-    lcd_draw_text_line(4u, "ENC BUZ RGB");
-    lcd_draw_text_line(5u, "SHORT CYAN");
-    lcd_draw_text_line(6u, "LONG PURPLE");
+    lcd_draw_wouo_list_row(2u, line, 0u);
+    lcd_draw_wouo_list_row(4u, "ENC BUZ RGB", 0u);
+    lcd_draw_wouo_list_row(5u, "SHORT CYAN", 0u);
+    lcd_draw_wouo_list_row(6u, "LONG PURPLE", 0u);
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
 static void lcd_draw_fido_wipe_page(void) {
     char line[24];
 
-    lcd_draw_shell(LCD_ZH_WIPE);
+    lcd_draw_wouo_list_page(LCD_ZH_WIPE);
     if (s_fido_wipe_active != 0u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 48u, 112u, LCD_ZH_ERASING);
-        lcd_draw_progress_bar(LCD_TEXT_X, 66u, 96u, 10u, s_fido_wipe_progress);
+        lcd_draw_zh_at(6u, 42u, 112u, LCD_ZH_ERASING);
+        lcd_draw_progress_bar(8u, 66u, 104u, 10u, s_fido_wipe_progress);
         snprintf(line, sizeof(line), "ERASE %u%%", (unsigned)s_fido_wipe_progress);
-        lcd_draw_text_line(4u, line);
-        lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_PLEASE_WAIT);
+        lcd_draw_wouo_list_row(4u, line, 1u);
+        lcd_draw_zh_at(6u, 98u, 112u, LCD_ZH_PLEASE_WAIT);
     } else if (s_last_fido_store_result == 1u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_DONE);
+        lcd_draw_zh_at(6u, 98u, 112u, LCD_ZH_DONE);
     } else if (s_last_fido_store_result == 2u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_ERASE_FAIL);
+        lcd_draw_zh_at(6u, 98u, 112u, LCD_ZH_ERASE_FAIL);
     } else {
-        lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_SHORT_ERASE);
-        lcd_draw_zh_at(LCD_TEXT_X, 68u, 112u, LCD_ZH_LONG_BACK);
-        lcd_draw_text_line(5u, "READY");
+        lcd_draw_zh_at(6u, 50u, 112u, LCD_ZH_SHORT_ERASE);
+        lcd_draw_zh_at(6u, 68u, 112u, LCD_ZH_LONG_BACK);
+        lcd_draw_wouo_list_row(5u, "READY", 1u);
     }
-    lcd_draw_zh_at(LCD_TEXT_X, 112u, 108u, LCD_ZH_REREGISTER);
+    lcd_draw_zh_at(6u, 112u, 108u, LCD_ZH_REREGISTER);
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
 static void lcd_draw_fido_delete_page(void) {
     char line[24];
 
-    lcd_draw_shell(LCD_ZH_DELETE);
+    lcd_draw_wouo_list_page(LCD_ZH_DELETE);
     if (s_fido_delete_active != 0u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 48u, 112u, LCD_ZH_ACCOUNT);
+        lcd_draw_zh_at(6u, 44u, 112u, LCD_ZH_ACCOUNT);
         lcd_draw_text_at(48u, 51u, 60u,
                          s_last_fido_delete_name[0] != '\0' ? s_last_fido_delete_name : "USER");
-        lcd_draw_progress_bar(LCD_TEXT_X, 68u, 96u, 10u, s_fido_delete_progress);
+        lcd_draw_progress_bar(8u, 68u, 104u, 10u, s_fido_delete_progress);
         snprintf(line, sizeof(line), "DELETE %u%%", (unsigned)s_fido_delete_progress);
-        lcd_draw_text_line(4u, line);
-        lcd_draw_zh_at(LCD_TEXT_X, 98u, 112u, LCD_ZH_PLEASE_WAIT);
+        lcd_draw_wouo_list_row(4u, line, 1u);
+        lcd_draw_zh_at(6u, 98u, 112u, LCD_ZH_PLEASE_WAIT);
         return;
     }
 
     if (s_last_fido_delete_count == 0u) {
         if (s_last_fido_store_result == 1u) {
-            lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_DONE);
+            lcd_draw_zh_at(6u, 50u, 112u, LCD_ZH_DONE);
         } else if (s_last_fido_store_result == 2u) {
-            lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_DELETE_FAIL);
+            lcd_draw_zh_at(6u, 50u, 112u, LCD_ZH_DELETE_FAIL);
         } else {
-            lcd_draw_zh_at(LCD_TEXT_X, 50u, 112u, LCD_ZH_NO_KEY);
+            lcd_draw_zh_at(6u, 50u, 112u, LCD_ZH_NO_KEY);
         }
-        lcd_draw_zh_at(LCD_TEXT_X, 68u, 112u, LCD_ZH_LONG_BACK);
-        lcd_draw_zh_at(LCD_TEXT_X, 86u, 112u, LCD_ZH_REREGISTER);
+        lcd_draw_zh_at(6u, 68u, 112u, LCD_ZH_LONG_BACK);
+        lcd_draw_zh_at(6u, 86u, 112u, LCD_ZH_REREGISTER);
         return;
     }
 
-    lcd_draw_zh_at(LCD_TEXT_X, 46u, 28u, LCD_ZH_ACCOUNT);
+    lcd_draw_zh_at(6u, 44u, 28u, LCD_ZH_ACCOUNT);
     snprintf(line, sizeof(line), "%u/%u",
              (unsigned)(s_last_fido_delete_index + 1u),
              (unsigned)s_last_fido_delete_count);
     lcd_draw_text_at(48u, 49u, 40u, line);
-    lcd_draw_text_at(LCD_TEXT_X, 66u, 108u,
-                     s_last_fido_delete_name[0] != '\0' ? s_last_fido_delete_name : "USER");
-    lcd_draw_zh_at(LCD_TEXT_X, 84u, 112u, LCD_ZH_KNOB_SELECT);
+    lcd_draw_wouo_list_row(2u,
+                           s_last_fido_delete_name[0] != '\0' ? s_last_fido_delete_name : "USER",
+                           1u);
+    lcd_draw_zh_at(6u, 84u, 112u, LCD_ZH_KNOB_SELECT);
 
     if (s_last_fido_store_result == 1u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 102u, 112u, LCD_ZH_DONE);
+        lcd_draw_zh_at(6u, 102u, 112u, LCD_ZH_DONE);
     } else if (s_last_fido_store_result == 2u) {
-        lcd_draw_zh_at(LCD_TEXT_X, 102u, 112u, LCD_ZH_DELETE_FAIL);
+        lcd_draw_zh_at(6u, 102u, 112u, LCD_ZH_DELETE_FAIL);
     } else {
-        lcd_draw_zh_at(LCD_TEXT_X, 100u, 112u, LCD_ZH_SHORT_DELETE);
-        lcd_draw_zh_at(LCD_TEXT_X, 114u, 112u, LCD_ZH_LONG_BACK);
+        lcd_draw_zh_at(6u, 100u, 112u, LCD_ZH_SHORT_DELETE);
+        lcd_draw_zh_at(6u, 114u, 112u, LCD_ZH_LONG_BACK);
     }
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
 static void lcd_draw_fido_popup(void)
@@ -484,32 +520,59 @@ static void lcd_draw_fido_popup(void)
         draw_reset_text = 1u;
     }
 
-    ls013_lcd_rect(8u, 8u, 112u, 112u, 0u);
-    ls013_lcd_frame(8u, 8u, 112u, 112u, 1u);
-    ls013_lcd_frame(10u, 10u, 108u, 108u, 1u);
-    ls013_lcd_rect(14u, 14u, 74u, 18u, 1u);
-    lcd_draw_zh_invert_at(20u, 17u, LCD_ZH_FIDO_CONFIRM);
+    int16_t popup_y_i = lcd_wouo_px(s_wouo_popup_y);
+    uint8_t popup_y;
+
+    if ((popup_y_i < 0) || (popup_y_i > 127)) {
+        return;
+    }
+    popup_y = (uint8_t)popup_y_i;
+
+    ls013_lcd_rect(14u, popup_y, 100u, 86u, 0u);
+    ls013_lcd_frame(14u, popup_y, 100u, 86u, 1u);
+    lcd_draw_wouo_tag(18u, (uint8_t)(popup_y + 5u), LCD_ZH_FIDO_CONFIRM, 68u);
     if (draw_reset_text != 0u) {
-        lcd_draw_text_at(20u, 43u, 88u, "AUTH RESET");
+        lcd_draw_text_at(22u, (uint8_t)(popup_y + 31u), 88u, "AUTH RESET");
     } else {
-        lcd_draw_zh_at(20u, 40u, 88u, cmd_text);
+        lcd_draw_zh_at(22u, (uint8_t)(popup_y + 30u), 88u, cmd_text);
     }
     if ((s_last_fido_selection_count > 1u) && (s_last_fido_pending_cmd == CTAP_CMD_GET_ASSERTION)) {
-        lcd_draw_zh_at(20u, 56u, 28u, LCD_ZH_ACCOUNT);
+        lcd_draw_zh_at(22u, (uint8_t)(popup_y + 45u), 28u, LCD_ZH_ACCOUNT);
         snprintf(line, sizeof(line), "%u/%u",
                  (unsigned)(s_last_fido_selection_index + 1u),
                  (unsigned)s_last_fido_selection_count);
-        lcd_draw_text_at(50u, 59u, 26u, line);
-        lcd_draw_text_at(20u, 74u, 88u, s_last_fido_selection_name[0] != '\0' ? s_last_fido_selection_name : "USER");
-        lcd_draw_zh_at(20u, 90u, 88u, LCD_ZH_KNOB_SELECT);
-        lcd_draw_zh_at(20u, 104u, 88u, LCD_ZH_SHORT_OK);
+        lcd_draw_text_at(52u, (uint8_t)(popup_y + 48u), 26u, line);
+        lcd_draw_text_at(22u, (uint8_t)(popup_y + 61u), 88u, s_last_fido_selection_name[0] != '\0' ? s_last_fido_selection_name : "USER");
+        lcd_draw_zh_at(22u, (uint8_t)(popup_y + 73u), 88u, LCD_ZH_KNOB_SELECT);
     } else {
-        lcd_draw_zh_at(20u, 66u, 88u, LCD_ZH_SHORT_OK);
-        lcd_draw_zh_at(20u, 84u, 88u, LCD_ZH_LONG_CANCEL);
+        lcd_draw_zh_at(22u, (uint8_t)(popup_y + 49u), 88u, LCD_ZH_SHORT_OK);
+        lcd_draw_zh_at(22u, (uint8_t)(popup_y + 67u), 88u, LCD_ZH_LONG_CANCEL);
     }
 }
 
 static void lcd_redraw_page(void) {
+    uint8_t force_anim = 0u;
+
+    if ((s_wouo_last_menu_active != s_menu_active) ||
+        (s_wouo_last_active_app != s_active_app)) {
+        force_anim = 1u;
+    }
+    s_wouo_last_menu_active = s_menu_active;
+    s_wouo_last_menu_index = s_menu_index;
+    s_wouo_last_active_app = s_active_app;
+
+    if (s_menu_active != 0u) {
+        lcd_wouo_prepare_menu_anim(force_anim);
+    } else {
+        lcd_wouo_prepare_list_anim(force_anim);
+    }
+    s_wouo_popup_y_trg = ((s_last_fido_ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
+                          !((s_menu_active == 0u) &&
+                            ((s_active_app == LCD_STATUS_APP_WIPE) ||
+                             (s_active_app == LCD_STATUS_APP_DELETE_KEY)))) ?
+                         (18 * LCD_WOUO_SCALE) : (-96 * LCD_WOUO_SCALE);
+    lcd_wouo_step_anim();
+
     if (s_menu_active != 0u) {
         lcd_draw_menu_page();
     } else {
@@ -594,6 +657,29 @@ void lcd_status_init(void) {
     s_last_fido_delete_count = 0xFFFFu;
     s_last_fido_delete_index = 0xFFFFu;
     memset(s_last_fido_delete_name, 0, sizeof(s_last_fido_delete_name));
+    s_last_anim_ms = 0u;
+    s_wouo_tile_x = 0;
+    s_wouo_tile_x_trg = 0;
+    s_wouo_tile_y = -LCD_WOUO_TILE_ICON_H * LCD_WOUO_SCALE;
+    s_wouo_tile_y_trg = 14 * LCD_WOUO_SCALE;
+    s_wouo_title_y = 94 * LCD_WOUO_SCALE;
+    s_wouo_title_y_trg = 61 * LCD_WOUO_SCALE;
+    s_wouo_indi_w = 0;
+    s_wouo_indi_w_trg = 10 * LCD_WOUO_SCALE;
+    s_wouo_list_y = 16 * LCD_WOUO_SCALE;
+    s_wouo_list_y_trg = 0;
+    s_wouo_list_box_y = 0;
+    s_wouo_list_box_y_trg = 20 * LCD_WOUO_SCALE;
+    s_wouo_list_box_w = 0;
+    s_wouo_list_box_w_trg = 64 * LCD_WOUO_SCALE;
+    s_wouo_list_bar_y = 0;
+    s_wouo_list_bar_y_trg = 18 * LCD_WOUO_SCALE;
+    s_wouo_popup_y = -96 * LCD_WOUO_SCALE;
+    s_wouo_popup_y_trg = -96 * LCD_WOUO_SCALE;
+    s_wouo_anim_active = 1u;
+    s_wouo_last_menu_index = 0xFFu;
+    s_wouo_last_menu_active = 0xFFu;
+    s_wouo_last_active_app = 0xFFu;
 
     ls013_lcd_init();
     lcd_redraw_page();
@@ -684,6 +770,11 @@ void lcd_status_tick(uint32_t now_ms) {
         return;
     }
     ls013_lcd_tick(now_ms);
+    if ((s_wouo_anim_active != 0u) &&
+        ((uint32_t)(now_ms - s_last_anim_ms) >= LCD_WOUO_FRAME_MS)) {
+        s_last_anim_ms = now_ms;
+        lcd_redraw_page();
+    }
 }
 
 void lcd_status_update(uint8_t dev_state,

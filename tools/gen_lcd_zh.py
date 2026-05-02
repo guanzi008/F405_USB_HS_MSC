@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path("/home/hao/link/A/F405_USB_HS_MSC")
 OUT_C = ROOT / "Core/Src/lcd_zh.c"
-FONT_FAMILY = "Noto Sans CJK SC"
+FONT_FAMILY = "WenQuanYi Zen Hei Sharp"
 
 
 ENTRIES = [
@@ -51,12 +51,6 @@ ENTRIES = [
     ("LCD_ZH_DELETE_FAIL", "删除失败", 12, 208),
     ("LCD_ZH_REREGISTER", "重新注册", 12, 208),
     ("LCD_ZH_NO_KEY", "没有密钥", 12, 208),
-    ("LCD_ZH_MENU_USB_DEBUG_S", "USB调试", 8, 190),
-    ("LCD_ZH_MENU_SECURITY_KEY_S", "安全密钥", 8, 190),
-    ("LCD_ZH_MENU_SPI_FLASH_S", "SPI闪存", 8, 190),
-    ("LCD_ZH_MENU_INPUT_DEV_S", "输入设备", 8, 190),
-    ("LCD_ZH_MENU_WIPE_KEY_S", "清空密钥", 8, 190),
-    ("LCD_ZH_MENU_DELETE_KEY_S", "删除密钥", 8, 190),
 ]
 
 
@@ -97,8 +91,8 @@ def render_bitmap(text: str, size: int, threshold: int) -> tuple[int, int, list[
                 "--pixels",
                 f"--font={FONT_FAMILY} {size}",
                 "--hinting=full",
-                "--antialias=gray",
-                "--margin=2",
+                "--antialias=none",
+                "--margin=1",
                 "--background=white",
                 "--foreground=black",
                 f"--output={png}",
