@@ -4,14 +4,25 @@
 
 - `CMSIS-DAP HID`
 - `FIDO HID`
+- `USB HID Keyboard`
+- `USB HID Mouse`
 - `MSC`
 - LCD 中文菜单与设备侧交互
 - SPI Flash 凭证存储
+- UART4 串口控制的键盘 / 鼠标输入
 
 当前 USB 枚举为：
 
 - `VID:PID = cafe:4009`
 - `Product = UltraLink CMSIS-DAP FIDO MSC`
+
+当前复合 USB 接口：
+
+- `CMSIS-DAP HID`：调试通道
+- `FIDO HID`：CTAP1/U2F 与 CTAP2
+- `MSC`：保留的大容量存储接口
+- `HID Keyboard`：串口驱动的键盘输入
+- `HID Mouse`：串口驱动的鼠标输入
 
 ## 当前状态
 
@@ -23,6 +34,8 @@
 - `CTAP2 getNextAssertion`
 - `CTAPHID CANCEL`
 - `CTAPHID LOCK`
+- USB HID 键盘 / 鼠标枚举
+- UART4 全局串口命令输入，不需要先进入 LCD 的输入设备页面
 
 补充行为：
 
@@ -56,6 +69,13 @@
   - delete credential
   - update user information
 - 板上 `删除密钥 / 清空密钥`
+- `HID Keyboard / Mouse`
+  - 键盘 8 字节 boot/report 协议报文
+  - 鼠标 4 字节相对移动报文
+  - UART4 中断接收环形缓冲
+  - 命令队列与自动按键释放
+  - 支持 `key`、`hid`、裸 HID usage、`type`、`m`、`click`、`btn`、`release`
+  - 每条非空命令行返回 `AKM OK ...` 状态行，便于上位机确认
 
 当前仍在继续补全：
 
@@ -173,6 +193,19 @@ probe-rs reset \
 lsusb -d cafe:4009
 ```
 
+### Linux 输入设备枚举
+
+插入设备后应能看到键盘和鼠标事件节点：
+
+```bash
+ls -l /dev/input/by-id | grep -i ultralink
+```
+
+典型结果会包含：
+
+- `...if02-event-kbd`
+- `...if03-event-mouse`
+
 ### FIDO 信息
 
 ```bash
@@ -228,6 +261,152 @@ fido2-token -I /dev/hidrawX
 - `maxcredlen: 32`
 - `maxlargeblob: 3824`
 
+## UART HID 键盘鼠标
+
+UART4 用于控制 USB HID 键盘 / 鼠标。当前命令解析在主循环全局启用，不依赖 LCD 当前页面；即使没有进入 `输入设备` 页面，也会接收串口命令。
+
+### 串口参数
+
+- `UART4`
+- `115200`
+- `8N1`
+- TX：`PA0`
+- RX：`PC11`
+- 行结束：`\r`、`\n` 或 `\r\n`
+
+建议上位机每条命令前发送一次 `0x18`，用于清掉可能残留的半行命令。固件收到 `0x03`、`0x18` 或 `0x1B` 会清空当前输入行。
+
+### 回包
+
+每解析一条非空命令行，设备会返回状态行：
+
+```text
+AKM OK RX=35 CMD=2 KEY=1 MOU=1 Q=2 DROP=0 LAST=hid 0 4
+```
+
+字段含义：
+
+- `RX`：串口累计接收字节
+- `CMD`：累计解析命令数
+- `KEY`：累计发送键盘 report 数
+- `MOU`：累计发送鼠标 report 数
+- `Q`：待发送 HID report 队列深度
+- `DROP`：队列满或命令过长导致的丢弃次数
+- `LAST`：最后一条命令摘要
+
+### 键盘命令
+
+按键组合：
+
+```text
+key a
+key SHIFT+a
+key CTRL+ALT+DEL
+key ENTER
+key ESC
+key F8
+```
+
+短别名：
+
+```text
+k a
+k SHIFT+UP
+```
+
+输入一段 ASCII 文本：
+
+```text
+type hello-123
+t hello
+```
+
+直接发送 HID usage：
+
+```text
+hid 0 4
+usage 0 4
+0 4
+```
+
+其中 `hid 0 4` 和裸格式 `0 4` 都表示修饰键 `0x00`、usage `0x04`，即 `a` 键。
+
+常用修饰键位：
+
+- `CTRL`
+- `SHIFT`
+- `ALT`
+- `GUI` / `WIN` / `META`
+
+常用功能键名：
+
+- `ENTER` / `RET`
+- `ESC` / `ESCAPE`
+- `BACKSPACE` / `BSP`
+- `TAB`
+- `SPACE`
+- `UP`、`DOWN`、`LEFT`、`RIGHT`
+- `HOME`、`END`、`PGUP`、`PGDN`
+- `INS`、`DEL`
+- `F1` 到 `F12`
+
+释放键盘和鼠标状态：
+
+```text
+release
+r
+```
+
+### 鼠标命令
+
+相对移动：
+
+```text
+m 20 0 0
+m -10 5 0
+m 0 0 1
+```
+
+格式为：
+
+```text
+m <dx> <dy> <wheel>
+```
+
+单次点击：
+
+```text
+click left
+click right
+click middle
+c l
+```
+
+设置鼠标按钮位：
+
+```text
+btn 1
+btn 0
+p 1
+p 0
+```
+
+按钮位定义：
+
+- `1`：左键
+- `2`：右键
+- `4`：中键
+
+### 上位机工具
+
+Qt/DTK 串口键鼠工具当前在仓库外部：
+
+```text
+/home/hao/link/A/ui
+```
+
+它会选择串口后发送上述命令。该目录不是本 firmware 仓库的一部分，如果需要一起发布，需要单独纳入仓库或创建独立仓库。
+
 ## 板上交互
 
 - 旋钮：菜单选择
@@ -243,9 +422,11 @@ fido2-token -I /dev/hidrawX
 - `输入设备`
 - `USB 调试`
 
+`输入设备` 页面用于查看 UART HID 键鼠状态，不是串口接收的开关。串口命令在设备启动后全局可用。
+
 ## 已知边界
 
-- Windows Hello 的 `PIN / reset` 管理链已经推进，`getInfo` 与 `bio preview getInfo` 的预检兼容也已补；但“直接作为 Windows 账户登录密钥”的兼容还没有完全收口。
+- Windows Hello 的 `PIN / reset` 管理链已经推进，`getInfo` 与 `bio preview getInfo` 的预检兼容也已补；但“直接作为 Windows 账户登录密钥”的兼容还没有完全收口。当前 Windows 仍可能提示“无法读取你的安全密钥，请重试”。
 - `authenticatorLargeBlobs` 命令面已经实现，当前 `maxlargeblob = 3824`。
 - 更完整的 `credMgmt`、更完整的 CTAP2.1 扩展仍在继续补。
 - 当前文档以 Linux 开发和调试流程为主。
