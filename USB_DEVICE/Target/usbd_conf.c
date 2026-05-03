@@ -464,16 +464,20 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
    *   EP1 IN  = CMSIS-DAP HID interrupt
    *   EP2 IN  = MSC bulk
    *   EP3 IN  = FIDO HID interrupt
+   *   EP4 IN  = UART keyboard HID interrupt
+   *   EP5 IN  = UART mouse HID interrupt
    *
-   * Each active IN endpoint needs a dedicated Tx FIFO. Without the FIDO FIFO
-   * Linux can enumerate the composite device but the second HID interface
-   * times out during probe.
+   * Each active IN endpoint needs a dedicated Tx FIFO. Missing FIFOs for the
+   * keyboard/mouse endpoints make Linux enumerate the interface descriptor and
+   * then time out while probing usbhid.
    */
   HAL_PCDEx_SetRxFiFo(&hpcd_USB_OTG_HS, 0x200);
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 0, 0x40);
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 1, 0x40);
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 2, 0x80);
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 3, 0x40);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 4, 0x20);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS, 5, 0x20);
   }
   return USBD_OK;
 }

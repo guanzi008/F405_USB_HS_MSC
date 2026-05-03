@@ -25,6 +25,7 @@
 #include "usbd_desc.h"
 #include "usbd_composite_builder.h"
 #include "usbd_hid.h"
+#include "usbd_hid_km.h"
 #include "usbd_fido_class.h"
 #include "usbd_msc.h"
 #include "usbd_storage_if.h"
@@ -37,6 +38,7 @@
 /* Private variables ---------------------------------------------------------*/
 static uint8_t s_dap_hid_ep_add[2] = { DAP_HID_EPIN_ADDR, DAP_HID_EPOUT_ADDR };
 static uint8_t s_fido_hid_ep_add[2] = { FIDO_HID_EPIN_ADDR, FIDO_HID_EPOUT_ADDR };
+static uint8_t s_hid_km_ep_add[2] = { HID_KM_KEYBOARD_EPIN_ADDR, HID_KM_MOUSE_EPIN_ADDR };
 static uint8_t s_msc_ep_add[2] = { MSC_EPIN_ADDR, MSC_EPOUT_ADDR };
 
 /* USER CODE END PV */
@@ -81,6 +83,13 @@ USBD_StatusTypeDef My_USB_HS_HID_MSC_Init(void)
                                        &USBD_FIDO_HID,
                                        CLASS_TYPE_CHID,
                                        s_fido_hid_ep_add);
+  if (result != USBD_OK)
+    return result;
+
+  result = USBD_RegisterClassComposite(&hUsbDeviceHS,
+                                       &USBD_HID_KM,
+                                       CLASS_TYPE_HID_KM,
+                                       s_hid_km_ep_add);
   if (result != USBD_OK)
     return result;
 

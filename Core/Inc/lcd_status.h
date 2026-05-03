@@ -9,6 +9,7 @@
 #define LCD_STATUS_APP_INPUT       3u
 #define LCD_STATUS_APP_WIPE        4u
 #define LCD_STATUS_APP_DELETE_KEY  5u
+#define LCD_STATUS_APP_HID_INPUT   6u
 
 void lcd_status_init(void);
 uint8_t lcd_status_is_menu_active(void);

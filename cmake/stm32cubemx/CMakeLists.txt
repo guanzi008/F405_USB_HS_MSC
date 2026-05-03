@@ -50,6 +50,7 @@ target_sources(stm32cubemx INTERFACE
     ../../USB_DEVICE/App/usbd_desc.c
     ../../USB_DEVICE/App/usbd_hid_cmsisdap.c
     ../../USB_DEVICE/App/usbd_hid_fido.c
+    ../../USB_DEVICE/App/usbd_hid_km.c
     ../../USB_DEVICE/App/usbd_fido_class.c
     ../../USB_DEVICE/App/usbd_ctap_min.c
     ../../USB_DEVICE/App/fido_crypto.c

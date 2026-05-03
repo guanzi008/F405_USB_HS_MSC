@@ -29,6 +29,7 @@
 #include "usbd_core.h"
 #include "usbd_ctap_min.h"
 #include "usbd_fido_class.h"
+#include "usbd_hid_km.h"
 #include "fido_store.h"
 #include "aux_inputs.h"
 #include "ext_flash_w25q.h"
@@ -66,6 +67,107 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define UART_DIAG_LOG_ENABLED 0u
+#define UART4_RX_RING_SIZE 256u
+
+#if UART_DIAG_LOG_ENABLED
+#define UART_DIAG_PRINTF(...) printf(__VA_ARGS__)
+#define UART_DIAG_PUTS(text) puts(text)
+#else
+#define UART_DIAG_PRINTF(...) do { } while (0)
+#define UART_DIAG_PUTS(text) do { } while (0)
+#endif
+
+static volatile uint8_t s_uart4_rx_ring[UART4_RX_RING_SIZE];
+static volatile uint16_t s_uart4_rx_head = 0u;
+static volatile uint16_t s_uart4_rx_tail = 0u;
+static volatile uint32_t s_uart4_rx_overflow = 0u;
+static uint8_t s_uart4_rx_byte = 0u;
+
+static void uart4_rx_start(void)
+{
+  (void)HAL_UART_Receive_IT(&huart4, &s_uart4_rx_byte, 1u);
+}
+
+static void uart4_rx_push(uint8_t byte)
+{
+  uint16_t next = (uint16_t)((s_uart4_rx_head + 1u) % UART4_RX_RING_SIZE);
+
+  if (next == s_uart4_rx_tail)
+  {
+    s_uart4_rx_overflow++;
+    return;
+  }
+  s_uart4_rx_ring[s_uart4_rx_head] = byte;
+  s_uart4_rx_head = next;
+}
+
+static uint8_t uart4_rx_pop(uint8_t *byte)
+{
+  if ((byte == NULL) || (s_uart4_rx_head == s_uart4_rx_tail))
+  {
+    return 0u;
+  }
+
+  *byte = s_uart4_rx_ring[s_uart4_rx_tail];
+  s_uart4_rx_tail = (uint16_t)((s_uart4_rx_tail + 1u) % UART4_RX_RING_SIZE);
+  return 1u;
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if ((huart != NULL) && (huart->Instance == UART4))
+  {
+    uart4_rx_push(s_uart4_rx_byte);
+    uart4_rx_start();
+  }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if ((huart != NULL) && (huart->Instance == UART4))
+  {
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    uart4_rx_start();
+  }
+}
+
+static void uart4_write_text(const char *text)
+{
+  size_t len;
+
+  if (text == NULL)
+  {
+    return;
+  }
+  len = strlen(text);
+  if (len == 0u)
+  {
+    return;
+  }
+  (void)HAL_UART_Transmit(&huart4, (uint8_t *)text, (uint16_t)len, 20u);
+}
+
+static void uart4_write_km_status(const char *prefix)
+{
+  usbd_hid_km_status_t km_status;
+  char line[128];
+
+  usbd_hid_km_get_status(&km_status);
+  (void)snprintf(line,
+                 sizeof(line),
+                 "%s RX=%lu CMD=%lu KEY=%lu MOU=%lu Q=%u DROP=%lu LAST=%s\r\n",
+                 prefix,
+                 (unsigned long)km_status.rx_bytes,
+                 (unsigned long)km_status.cmd_count,
+                 (unsigned long)km_status.key_reports,
+                 (unsigned long)km_status.mouse_reports,
+                 (unsigned)km_status.queue_depth,
+                 (unsigned long)km_status.dropped_reports,
+                 km_status.last_cmd);
+  uart4_write_text(line);
+}
+
 static void fido_wipe_progress_cb(uint16_t current, uint16_t total, void *ctx)
 {
   uint8_t progress = 0u;
@@ -167,12 +269,12 @@ static void fido_delete_selected_credential(void)
   HAL_Delay(120u);
   count_after = fido_store_count();
   slot_still_valid = fido_store_get_by_index(s_delete_slot_index, &verify_credential);
-  printf("ADEL SLOT=%lu BEFORE=%u AFTER=%u OK=%u VALID=%u\r\n",
-         (unsigned long)s_delete_slot_index,
-         (unsigned)count_before,
-         (unsigned)count_after,
-         (unsigned)delete_ok,
-         (unsigned)slot_still_valid);
+  UART_DIAG_PRINTF("ADEL SLOT=%lu BEFORE=%u AFTER=%u OK=%u VALID=%u\r\n",
+                   (unsigned long)s_delete_slot_index,
+                   (unsigned)count_before,
+                   (unsigned)count_after,
+                   (unsigned)delete_ok,
+                   (unsigned)slot_still_valid);
   if ((delete_ok != 0u) &&
       (count_after + 1u == count_before) &&
       (slot_still_valid == 0u))
@@ -221,14 +323,15 @@ int main(void)
   MX_UART4_Init();
   /* USER CODE BEGIN 2 */
 
-  puts("A actual-board USB test");
-  printf("%s编译时间 %s %s\n", __FILE__, __DATE__, __TIME__);
+  uart4_rx_start();
+  UART_DIAG_PUTS("A actual-board USB test");
+  UART_DIAG_PRINTF("%s编译时间 %s %s\n", __FILE__, __DATE__, __TIME__);
 
   ext_flash_init();
 
   if(My_USB_HS_HID_MSC_Init() != USBD_OK)
   {
-    puts("usb hs hid+msc init fail");
+    UART_DIAG_PUTS("usb hs hid+msc init fail");
   }
   aux_inputs_init();
   lcd_status_init();
@@ -263,15 +366,30 @@ int main(void)
                                        (active_app == LCD_STATUS_APP_DELETE_KEY)));
     in_local_page = (uint8_t)(menu_active == 0u);
     delete_page_active = (uint8_t)((menu_active == 0u) && (active_app == LCD_STATUS_APP_DELETE_KEY));
-    if (HAL_UART_Receive(&huart4, &uart_rx, 1u, 0u) == HAL_OK)
+    while (uart4_rx_pop(&uart_rx) != 0u)
     {
-      if ((uart_rx == 'y') || (uart_rx == 'Y'))
+      usbd_hid_km_status_t km_before;
+      usbd_hid_km_status_t km_after;
+
+      if ((fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
+          ((uart_rx == 'y') || (uart_rx == 'Y')))
       {
         usbd_ctap_min_note_user_presence();
       }
-      else if ((uart_rx == 'n') || (uart_rx == 'N'))
+      else if ((fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH) &&
+               ((uart_rx == 'n') || (uart_rx == 'N')))
       {
         usbd_ctap_min_note_user_denied();
+      }
+      else
+      {
+        usbd_hid_km_get_status(&km_before);
+        usbd_hid_km_feed_serial_byte(uart_rx);
+        usbd_hid_km_get_status(&km_after);
+        if (km_after.cmd_count != km_before.cmd_count)
+        {
+          uart4_write_km_status("AKM OK");
+        }
       }
     }
     if (delete_page_active != 0u)
@@ -290,10 +408,10 @@ int main(void)
           {
             usbd_ctap_min_note_user_denied();
           }
-          printf("ADELBTN SHORT CNT=%u SLOT=%lu POS=%ld\r\n",
-                 (unsigned)s_delete_selection_count,
-                 (unsigned long)s_delete_slot_index,
-                 (long)aux_status.encoder_position);
+          UART_DIAG_PRINTF("ADELBTN SHORT CNT=%u SLOT=%lu POS=%ld\r\n",
+                           (unsigned)s_delete_selection_count,
+                           (unsigned long)s_delete_slot_index,
+                           (long)aux_status.encoder_position);
           fido_delete_refresh_state();
           fido_delete_selected_credential();
         }
@@ -307,7 +425,7 @@ int main(void)
         {
           usbd_ctap_min_note_user_denied();
         }
-        printf("ADELBTN LONG POS=%ld\r\n", (long)aux_status.encoder_position);
+        UART_DIAG_PRINTF("ADELBTN LONG POS=%ld\r\n", (long)aux_status.encoder_position);
         s_delete_btn_consume_release = 1u;
         s_delete_btn_ignore_until_ms = now + 300u;
         s_delete_back_swallow_short = 1u;
@@ -360,14 +478,14 @@ int main(void)
                                         ((active_app == LCD_STATUS_APP_WIPE) ||
                                          (active_app == LCD_STATUS_APP_DELETE_KEY)));
       in_local_page = (uint8_t)(menu_active == 0u);
-      printf("ABTN SHORT MENU=%u APP=%u FUI=%u DCNT=%u SLOT=%lu POS=%ld EVT=%08lX\r\n",
-             (unsigned)menu_active,
-             (unsigned)active_app,
-             (unsigned)fido_ui.ui_state,
-             (unsigned)s_delete_selection_count,
-             (unsigned long)s_delete_slot_index,
-             (long)aux_status.encoder_position,
-             (unsigned long)input_events);
+      UART_DIAG_PRINTF("ABTN SHORT MENU=%u APP=%u FUI=%u DCNT=%u SLOT=%lu POS=%ld EVT=%08lX\r\n",
+                       (unsigned)menu_active,
+                       (unsigned)active_app,
+                       (unsigned)fido_ui.ui_state,
+                       (unsigned)s_delete_selection_count,
+                       (unsigned long)s_delete_slot_index,
+                       (long)aux_status.encoder_position,
+                       (unsigned long)input_events);
       if ((menu_active == 0u) && (active_app == LCD_STATUS_APP_WIPE))
       {
         if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
@@ -406,14 +524,14 @@ int main(void)
                                         ((active_app == LCD_STATUS_APP_WIPE) ||
                                          (active_app == LCD_STATUS_APP_DELETE_KEY)));
       in_local_page = (uint8_t)(menu_active == 0u);
-      printf("ABTN LONG MENU=%u APP=%u FUI=%u DCNT=%u SLOT=%lu POS=%ld EVT=%08lX\r\n",
-             (unsigned)menu_active,
-             (unsigned)active_app,
-             (unsigned)fido_ui.ui_state,
-             (unsigned)s_delete_selection_count,
-             (unsigned long)s_delete_slot_index,
-             (long)aux_status.encoder_position,
-             (unsigned long)input_events);
+      UART_DIAG_PRINTF("ABTN LONG MENU=%u APP=%u FUI=%u DCNT=%u SLOT=%lu POS=%ld EVT=%08lX\r\n",
+                       (unsigned)menu_active,
+                       (unsigned)active_app,
+                       (unsigned)fido_ui.ui_state,
+                       (unsigned)s_delete_selection_count,
+                       (unsigned long)s_delete_slot_index,
+                       (long)aux_status.encoder_position,
+                       (unsigned long)input_events);
       if (local_ui_has_priority != 0u)
       {
         if (fido_ui.ui_state == USBD_CTAP_UI_WAIT_TOUCH)
@@ -502,6 +620,7 @@ int main(void)
     a_usb_diag_capture_registers();
     usbd_ctap_min_get_ui_status(&fido_ui);
     USBD_FIDO_Service(&hUsbDeviceHS, now);
+    usbd_hid_km_service(&hUsbDeviceHS, now);
     lcd_status_update((uint8_t)hUsbDeviceHS.dev_state,
                       (uint8_t)hUsbDeviceHS.dev_config,
                       g_a_usb_diag_runtime.reset_count,
@@ -533,60 +652,60 @@ int main(void)
     if ((now - last_log_ms) >= 1000U)
     {
       last_log_ms = now;
-      printf("AUSB R=%lu S=%lu O=%lu I=%lu U=%lu C=%lu D=%lu IRQ=%lu AS=%lu OS=%lu LEP=%lu LFS=%lu DS=%u CFG=%lu\r\n",
-             g_a_usb_diag_runtime.reset_count,
-             g_a_usb_diag_runtime.setup_count,
-             g_a_usb_diag_runtime.data_out_count,
-             g_a_usb_diag_runtime.data_in_count,
-             g_a_usb_diag_runtime.suspend_count,
-             g_a_usb_diag_runtime.connect_count,
-             g_a_usb_diag_runtime.disconnect_count,
-             g_a_usb_diag_runtime.irq_count,
-             g_a_usb_diag_runtime.activate_setup_count,
-             g_a_usb_diag_runtime.ep0_out_start_count,
-             g_a_usb_diag_runtime.open_ep_count,
-             g_a_usb_diag_runtime.open_ep_fail_count,
-             hUsbDeviceHS.dev_state,
-             hUsbDeviceHS.dev_config);
-      printf("AHID C=%lu CLS=%lu BM=%02lX BR=%02lX WV=%04lX WI=%04lX WL=%04lX RL=%lu\r\n",
-             g_a_usb_diag_runtime.hid_setup_count,
-             g_a_usb_diag_runtime.hid_last_class,
-             g_a_usb_diag_runtime.hid_last_bmRequest & 0xFFu,
-             g_a_usb_diag_runtime.hid_last_bRequest & 0xFFu,
-             g_a_usb_diag_runtime.hid_last_wValue & 0xFFFFu,
-             g_a_usb_diag_runtime.hid_last_wIndex & 0xFFFFu,
-             g_a_usb_diag_runtime.hid_last_wLength & 0xFFFFu,
-             g_a_usb_diag_runtime.hid_last_report_len);
-      printf("AIF C=%lu IDX=%lu CLS=%lu BM=%02lX BR=%02lX ST=%lu\r\n",
-             g_a_usb_diag_runtime.itf_req_count,
-             g_a_usb_diag_runtime.itf_last_index,
-             g_a_usb_diag_runtime.itf_last_class,
-             g_a_usb_diag_runtime.itf_last_bmRequest & 0xFFu,
-             g_a_usb_diag_runtime.itf_last_bRequest & 0xFFu,
-             g_a_usb_diag_runtime.itf_last_status);
-      printf("AFID RX=%lu TX=%lu RL=%lu TL=%lu RW0=%08lX RW1=%08lX TW0=%08lX TW1=%08lX ST=%lu RE=%lu RR=%lu SQ=%lu RA=%lu\r\n",
-             g_a_usb_diag_runtime.fido_rx_count,
-             g_a_usb_diag_runtime.fido_tx_count,
-             g_a_usb_diag_runtime.fido_last_req_len,
-             g_a_usb_diag_runtime.fido_last_rsp_len,
-             g_a_usb_diag_runtime.fido_last_req_word0,
-             g_a_usb_diag_runtime.fido_last_req_word1,
-             g_a_usb_diag_runtime.fido_last_rsp_word0,
-             g_a_usb_diag_runtime.fido_last_rsp_word1,
-             g_a_usb_diag_runtime.fido_last_status,
-             g_a_usb_diag_runtime.fido_rx_expected_total,
-             g_a_usb_diag_runtime.fido_rx_received_total,
-             g_a_usb_diag_runtime.fido_rx_seq_next,
-             g_a_usb_diag_runtime.fido_rx_active);
-      printf("ACTP CMD=%02lX CST=%02lX AL=%lu MT=%lu AC=%lu UI=%u SEL=%u/%u\r\n",
-             g_a_usb_diag_runtime.fido_last_ctap_cmd & 0xFFu,
-             g_a_usb_diag_runtime.fido_last_ctap_status & 0xFFu,
-             g_a_usb_diag_runtime.fido_last_allow_count,
-             g_a_usb_diag_runtime.fido_last_match_count,
-             g_a_usb_diag_runtime.fido_last_auto_confirm,
-             fido_ui.ui_state,
-             fido_ui.selection_index,
-             fido_ui.selection_count);
+      UART_DIAG_PRINTF("AUSB R=%lu S=%lu O=%lu I=%lu U=%lu C=%lu D=%lu IRQ=%lu AS=%lu OS=%lu LEP=%lu LFS=%lu DS=%u CFG=%lu\r\n",
+                       g_a_usb_diag_runtime.reset_count,
+                       g_a_usb_diag_runtime.setup_count,
+                       g_a_usb_diag_runtime.data_out_count,
+                       g_a_usb_diag_runtime.data_in_count,
+                       g_a_usb_diag_runtime.suspend_count,
+                       g_a_usb_diag_runtime.connect_count,
+                       g_a_usb_diag_runtime.disconnect_count,
+                       g_a_usb_diag_runtime.irq_count,
+                       g_a_usb_diag_runtime.activate_setup_count,
+                       g_a_usb_diag_runtime.ep0_out_start_count,
+                       g_a_usb_diag_runtime.open_ep_count,
+                       g_a_usb_diag_runtime.open_ep_fail_count,
+                       hUsbDeviceHS.dev_state,
+                       hUsbDeviceHS.dev_config);
+      UART_DIAG_PRINTF("AHID C=%lu CLS=%lu BM=%02lX BR=%02lX WV=%04lX WI=%04lX WL=%04lX RL=%lu\r\n",
+                       g_a_usb_diag_runtime.hid_setup_count,
+                       g_a_usb_diag_runtime.hid_last_class,
+                       g_a_usb_diag_runtime.hid_last_bmRequest & 0xFFu,
+                       g_a_usb_diag_runtime.hid_last_bRequest & 0xFFu,
+                       g_a_usb_diag_runtime.hid_last_wValue & 0xFFFFu,
+                       g_a_usb_diag_runtime.hid_last_wIndex & 0xFFFFu,
+                       g_a_usb_diag_runtime.hid_last_wLength & 0xFFFFu,
+                       g_a_usb_diag_runtime.hid_last_report_len);
+      UART_DIAG_PRINTF("AIF C=%lu IDX=%lu CLS=%lu BM=%02lX BR=%02lX ST=%lu\r\n",
+                       g_a_usb_diag_runtime.itf_req_count,
+                       g_a_usb_diag_runtime.itf_last_index,
+                       g_a_usb_diag_runtime.itf_last_class,
+                       g_a_usb_diag_runtime.itf_last_bmRequest & 0xFFu,
+                       g_a_usb_diag_runtime.itf_last_bRequest & 0xFFu,
+                       g_a_usb_diag_runtime.itf_last_status);
+      UART_DIAG_PRINTF("AFID RX=%lu TX=%lu RL=%lu TL=%lu RW0=%08lX RW1=%08lX TW0=%08lX TW1=%08lX ST=%lu RE=%lu RR=%lu SQ=%lu RA=%lu\r\n",
+                       g_a_usb_diag_runtime.fido_rx_count,
+                       g_a_usb_diag_runtime.fido_tx_count,
+                       g_a_usb_diag_runtime.fido_last_req_len,
+                       g_a_usb_diag_runtime.fido_last_rsp_len,
+                       g_a_usb_diag_runtime.fido_last_req_word0,
+                       g_a_usb_diag_runtime.fido_last_req_word1,
+                       g_a_usb_diag_runtime.fido_last_rsp_word0,
+                       g_a_usb_diag_runtime.fido_last_rsp_word1,
+                       g_a_usb_diag_runtime.fido_last_status,
+                       g_a_usb_diag_runtime.fido_rx_expected_total,
+                       g_a_usb_diag_runtime.fido_rx_received_total,
+                       g_a_usb_diag_runtime.fido_rx_seq_next,
+                       g_a_usb_diag_runtime.fido_rx_active);
+      UART_DIAG_PRINTF("ACTP CMD=%02lX CST=%02lX AL=%lu MT=%lu AC=%lu UI=%u SEL=%u/%u\r\n",
+                       g_a_usb_diag_runtime.fido_last_ctap_cmd & 0xFFu,
+                       g_a_usb_diag_runtime.fido_last_ctap_status & 0xFFu,
+                       g_a_usb_diag_runtime.fido_last_allow_count,
+                       g_a_usb_diag_runtime.fido_last_match_count,
+                       g_a_usb_diag_runtime.fido_last_auto_confirm,
+                       fido_ui.ui_state,
+                       fido_ui.selection_index,
+                       fido_ui.selection_count);
     }
 
     lcd_status_tick(now);

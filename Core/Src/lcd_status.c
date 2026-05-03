@@ -3,12 +3,13 @@
 #include "lcd_zh.h"
 #include "ls013_lcd.h"
 #include "usbd_ctap_min.h"
+#include "usbd_hid_km.h"
 #include "wouo_ls013.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#define LCD_APP_COUNT 6u
+#define LCD_APP_COUNT 7u
 #define LCD_FIDO_RESERVED_BYTES (1024u * 1024u)
 #define LCD_WOUO_SCALE 16
 #define LCD_WOUO_FRAME_MS 33u
@@ -96,6 +97,7 @@ static const lcd_wouo_app_t s_wouo_apps[LCD_APP_COUNT] = {
     {LCD_ZH_MENU_INPUT_DEV, "INPUT", "ENCODER"},
     {LCD_ZH_MENU_WIPE_KEY, "WIPE", "CLEAR"},
     {LCD_ZH_MENU_DELETE_KEY, "DEL", "CREDENTIAL"},
+    {LCD_ZH_INPUT, "HID", "UART K/M"},
 };
 
 static void lcd_draw_text_at(uint8_t x, uint8_t y, uint8_t clear_w, const char *text)
@@ -298,6 +300,11 @@ static void lcd_draw_wouo_icon(uint8_t index, int16_t x, uint8_t y, uint8_t sele
             ls013_lcd_vline((uint8_t)(x8 + 17u), (uint8_t)(y + 11u), 12u, 1u);
             ls013_lcd_hline((uint8_t)(x8 + 11u), (uint8_t)(y + 17u), 12u, 1u);
             break;
+        case LCD_STATUS_APP_HID_INPUT:
+            ls013_lcd_frame((uint8_t)(x8 + 7u), (uint8_t)(y + 9u), 20u, 11u, 1u);
+            ls013_lcd_hline((uint8_t)(x8 + 10u), (uint8_t)(y + 23u), 14u, 1u);
+            ls013_lcd_rect((uint8_t)(x8 + 21u), (uint8_t)(y + 22u), 5u, 7u, 1u);
+            break;
         case LCD_STATUS_APP_WIPE:
             ls013_lcd_frame((uint8_t)(x8 + 10u), (uint8_t)(y + 9u), 14u, 19u, 1u);
             ls013_lcd_hline((uint8_t)(x8 + 8u), (uint8_t)(y + 9u), 18u, 1u);
@@ -431,6 +438,26 @@ static void lcd_draw_input_page(void) {
     lcd_draw_wouo_list_row(4u, "ENC BUZ RGB", 0u);
     lcd_draw_wouo_list_row(5u, "SHORT CYAN", 0u);
     lcd_draw_wouo_list_row(6u, "LONG PURPLE", 0u);
+    lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
+}
+
+static void lcd_draw_hid_input_page(void) {
+    char line[24];
+    usbd_hid_km_status_t status;
+
+    usbd_hid_km_get_status(&status);
+    lcd_draw_wouo_list_page(LCD_ZH_INPUT);
+    lcd_draw_wouo_list_row(0u, "UART4 115200", 1u);
+    snprintf(line, sizeof(line), "RX:%lu CMD:%lu", status.rx_bytes, status.cmd_count);
+    lcd_draw_wouo_list_row(1u, line, 0u);
+    snprintf(line, sizeof(line), "KEY:%lu MOU:%lu", status.key_reports, status.mouse_reports);
+    lcd_draw_wouo_list_row(2u, line, 0u);
+    snprintf(line, sizeof(line), "Q:%u DROP:%lu", status.queue_depth, status.dropped_reports);
+    lcd_draw_wouo_list_row(3u, line, 0u);
+    snprintf(line, sizeof(line), "LED:%02X", status.led_report);
+    lcd_draw_wouo_list_row(4u, line, 0u);
+    lcd_draw_wouo_list_row(5u, status.last_cmd, 0u);
+    lcd_draw_wouo_list_row(6u, "t TXT key/m/click", 0u);
     lcd_draw_wouo_scroll_bar((uint8_t)lcd_wouo_px(s_wouo_list_bar_y));
 }
 
@@ -591,6 +618,9 @@ static void lcd_redraw_page(void) {
             break;
         case LCD_STATUS_APP_DELETE_KEY:
             lcd_draw_fido_delete_page();
+            break;
+        case LCD_STATUS_APP_HID_INPUT:
+            lcd_draw_hid_input_page();
             break;
         default:
             lcd_draw_input_page();
@@ -772,6 +802,11 @@ void lcd_status_tick(uint32_t now_ms) {
     ls013_lcd_tick(now_ms);
     if ((s_wouo_anim_active != 0u) &&
         ((uint32_t)(now_ms - s_last_anim_ms) >= LCD_WOUO_FRAME_MS)) {
+        s_last_anim_ms = now_ms;
+        lcd_redraw_page();
+    } else if ((s_menu_active == 0u) &&
+               (s_active_app == LCD_STATUS_APP_HID_INPUT) &&
+               ((uint32_t)(now_ms - s_last_anim_ms) >= 200u)) {
         s_last_anim_ms = now_ms;
         lcd_redraw_page();
     }
